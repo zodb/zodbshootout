@@ -1,0 +1,8 @@
+#!/bin/sh
+bin/supervisorctl shutdown
+sleep 3
+rm -rf var/mysql
+bin/buildout -No
+sleep 3
+bin/supervisord
+bin/supervisorctl status
