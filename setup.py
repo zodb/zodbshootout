@@ -13,7 +13,7 @@
 ##############################################################################
 """A ZODB performance test"""
 
-version = "0.1dev"
+version = "0.1"
 
 from setuptools import setup, find_packages
 import os
