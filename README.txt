@@ -145,14 +145,21 @@ writing or reading under the given conditions.
 
     ``zodbshootout`` begins a transaction, adds the specified number of
     persistent objects to a ``PersistentMapping``, and commits the
-    transaction.
+    transaction. In the sample output above, MySQL was able to write
+    9441 objects per second to the database, almost twice as fast as
+    ZEO. With memcached support enabled, write performance took a small
+    hit due to the time spent storing objects in memcached.
 
 * Read warm objects
 
     In a different process, without clearing any caches,
     ``zodbshootout`` reads all of the objects just written. This test
     favors databases that use either a persistent cache or a cache
-    shared by multiple processes (such as memcached).
+    shared by multiple processes (such as memcached). In the sample
+    output above, this test with MySQL and memcached runs more than ten
+    times faster than ZEO without a persistent cache. (See
+    ``fs-sample.conf`` for a test configuration that includes a ZEO
+    persistent cache.)
 
 * Read cold objects
 
@@ -160,14 +167,17 @@ writing or reading under the given conditions.
     ``zodbshootout`` clears all ZODB caches (the pickle cache, the ZEO
     cache, and/or memcached) then reads all of the objects written by
     the write test. This test favors databases that read objects
-    quickly, independently of caching.
+    quickly, independently of caching. In the sample output above,
+    MySQL cheats a little because it uses a query cache.
 
 * Read hot objects
 
     In the same process as was used for reading cold objects,
     ``zodbshootout`` clears only the in-memory ZODB caches (the pickle
     cache) then reads all of the objects written by the write test.
-    This test favors databases that have a process-specific cache.
+    This test favors databases that have a process-specific cache. In
+    the sample output above, all of the databases have that type of
+    cache.
 
 * Read steamin' objects
 
@@ -175,8 +185,8 @@ writing or reading under the given conditions.
     ``zodbshootout`` once again reads all of the objects written by the
     write test. This test favors databases that take advantage of the
     ZODB pickle cache. As can be seen from the sample output above,
-    accessing an object from the ZODB pickle cache is much faster
-    than any operation that requires network access or unpickling.
+    accessing an object from the ZODB pickle cache is much faster than
+    any operation that requires network access or unpickling.
 
 Known Issues
 ------------
