@@ -191,8 +191,8 @@ writing or reading under the given conditions.
     ``zodbshootout`` clears all ZODB caches (the pickle cache, the ZEO
     cache, and/or memcached) then reads all of the objects written by
     the update test. This test favors databases that read objects
-    quickly, independently of caching. In the sample output above,
-    MySQL cheats a little because it uses a query cache.
+    quickly, independently of caching. The sample output above shows
+    that cold read time is currently a significant ZEO weakness.
 
 * Read hot objects
 
