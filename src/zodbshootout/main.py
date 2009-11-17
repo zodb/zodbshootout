@@ -85,7 +85,7 @@ class SpeedTest:
     def write_test(self, db_factory, n, sync):
         db = db_factory()
 
-        def do_write():
+        def do_add():
             start = time.time()
             conn = db.open()
             root = conn.root()
@@ -98,11 +98,25 @@ class SpeedTest:
 
         db.open().close()
         sync()
-        t = self._execute(do_write, 'write', n)
+        add_time = self._execute(do_add, 'add', n)
+
+        def do_update():
+            start = time.time()
+            conn = db.open()
+            root = conn.root()
+            for obj in conn.root()['speedtest'][n].itervalues():
+                obj.attr = 1
+            transaction.commit()
+            conn.close()
+            end = time.time()
+            return end - start
+
+        sync()
+        update_time = self._execute(do_update, 'update', n)
 
         time.sleep(.1)
         db.close()
-        return t
+        return add_time, update_time
 
     def read_test(self, db_factory, n, sync):
         db = db_factory()
@@ -188,12 +202,17 @@ class SpeedTest:
         r = range(self.concurrency)
         write_times = distribute(write, r)
         read_times = distribute(read, r)
+
+        add_times = [t[0] for t in write_times]
+        update_times = [t[1] for t in write_times]
         warm_times = [t[0] for t in read_times]
         cold_times = [t[1] for t in read_times]
         hot_times = [t[2] for t in read_times]
         steamin_times = [t[3] for t in read_times]
+
         return (
-            sum(write_times) / self.concurrency,
+            sum(add_times) / self.concurrency,
+            sum(update_times) / self.concurrency,
             sum(warm_times) / self.concurrency,
             sum(cold_times) / self.concurrency,
             sum(hot_times) / self.concurrency,
@@ -265,12 +284,21 @@ def main(argv=None):
     config, handler = ZConfig.loadConfig(schema, conf_fn)
     contenders = [(db.name, db) for db in config.databases]
 
+    txn_descs = (
+        "Add %d Objects",
+        "Update %d Objects",
+        "Read %d Warm Objects",
+        "Read %d Cold Objects",
+        "Read %d Hot Objects",
+        "Read %d Steamin' Objects",
+        )
+
     # results: {(objects_per_txn, concurrency, contender, phase): [time]}}
     results = {}
     for objects_per_txn in object_counts:
         for concurrency in concurrency_levels:
             for contender_name, db in contenders:
-                for phase in range(5):
+                for phase in range(len(txn_descs)):
                     key = (objects_per_txn, concurrency,
                             contender_name, phase)
                     results[key] = []
@@ -301,11 +329,12 @@ def main(argv=None):
                             else:
                                 break
                         msg = (
-                            'write %6.4fs, warm %6.4fs, cold %6.4fs, '
+                            'add %6.4fs, update %6.4fs, '
+                            'warm %6.4fs, cold %6.4fs, '
                             'hot %6.4fs, steamin %6.4fs'
                             % times)
                         print >> sys.stderr, msg
-                        for i in range(5):
+                        for i in range(6):
                             results[key + (i,)].append(times[i])
 
     # The finally clause causes test results to print even if the tests
@@ -318,14 +347,6 @@ def main(argv=None):
             'Results show objects written or read per second. '
             'Best of 3.')
 
-        txn_descs = (
-            "Write %d Objects",
-            "Read %d Warm Objects",
-            "Read %d Cold Objects",
-            "Read %d Hot Objects",
-            "Read %d Steamin' Objects",
-            )
-
         for concurrency in concurrency_levels:
             print
             print '** concurrency=%d **' % concurrency
@@ -336,7 +357,7 @@ def main(argv=None):
                 row.append(contender_name)
             rows.append(row)
 
-            for phase in range(5):
+            for phase in range(len(txn_descs)):
                 for objects_per_txn in object_counts:
                     desc = txn_descs[phase] % objects_per_txn
                     if objects_per_txn == 1:

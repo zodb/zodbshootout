@@ -1,9 +1,7 @@
-zodbshootout
-------------
 
 This application measures and compares the performance of various
 ZODB storages and configurations. It is derived from the RelStorage
-speedtest script, but this version allows more types of storages and
+speedtest script, but this version allows arbitrary storage types and
 configurations, provides more measurements, and produces numbers that
 are easier to interpret.
 
@@ -11,8 +9,18 @@ Although you can ``easy_install`` this package, the best way to get
 started is to follow the directions below to set up a complete testing
 environment with sample tests.
 
-How to set up ``zodbshootout`` using Buildout
----------------------------------------------
+.. contents::
+
+Known Issues
+------------
+
+This application seems to freeze with Python versions before 2.6, most
+likely due to some issue connected with the backported version of the
+``multiprocessing`` module. Assistance in finding a resolution would be
+greatly appreciated.
+
+Installing ``zodbshootout`` using Buildout
+------------------------------------------
 
 First, be sure you have certain packages installed so you can compile
 software. Ubuntu and Debian users should do this (tested with Ubuntu
@@ -88,10 +96,12 @@ The ``zodbshootout`` script accepts the name of a database
 configuration file. The configuration file contains a list of databases
 to test, in ZConfig format. The script deletes all data from each of
 the databases, then writes and reads the databases while taking
-measurements. Finally, the script produces a tabular summary of
-objects written or read per second in each configuration.
+measurements. Finally, the script produces a tabular summary of objects
+written or read per second in each configuration. ``zodbshootout`` uses
+the names of the databases defined in the configuration file as the
+table column names.
 
-**Repeated Warning**: ``zodbshootout`` deletes all data from all
+**Warning**: Again, ``zodbshootout`` **deletes all data** from all
 databases specified in the configuration file. Do not configure it to
 open production databases!
 
@@ -113,7 +123,7 @@ The ``zodbshootout`` script accepts the following options.
 * ``-p`` (``--profile``) enables the Python profiler while running the
   tests and outputs a profile for each test in the specified directory.
   Note that the profiler typically reduces the database speed by a lot.
-  This option is intended to help developers discover performance
+  This option is intended to help developers isolate performance
   bottlenecks.
 
 You should write a configuration file that models your intended
@@ -128,32 +138,46 @@ The table below shows typical output of running ``zodbshootout`` with
 ``etc/sample.conf`` on a dual core, 2.1 GHz laptop::
 
     "Transaction",                postgresql, mysql,   mysql_mc, zeo_fs
-    "Write 1000 Objects",               6346,    9441,     8229,    4965
-    "Read 1000 Warm Objects",           5091,    6224,    21603,    1950
-    "Read 1000 Cold Objects",           5030,   10867,     5224,    1932
-    "Read 1000 Hot Objects",           36440,   38322,    38197,   38166
-    "Read 1000 Steamin' Objects",    4773034, 3909861,  3490163, 4254936
+    "Add 1000 Objects",                 6529,   10027,     9248,    5212
+    "Update 1000 Objects",              6754,    9012,     8064,    4393
+    "Read 1000 Warm Objects",           4969,    6147,    21683,    1960
+    "Read 1000 Cold Objects",           5041,   10554,     5095,    1920
+    "Read 1000 Hot Objects",           38132,   37286,    37826,   37723
+    "Read 1000 Steamin' Objects",    4591465, 4366792,  3339414, 4534382
 
-``zodbshootout`` runs five kinds of tests for each database. For each
+``zodbshootout`` runs six kinds of tests for each database. For each
 test, ``zodbshootout`` instructs all processes to perform similar
 transactions concurrently, computes the average duration of the
 concurrent transactions, takes the fastest timing of three test runs,
 and derives how many objects per second the database is capable of
 writing or reading under the given conditions.
 
-* Write objects
+``zodbshootout`` runs these tests:
+
+* Add objects
 
     ``zodbshootout`` begins a transaction, adds the specified number of
     persistent objects to a ``PersistentMapping``, and commits the
-    transaction. In the sample output above, MySQL was able to write
-    9441 objects per second to the database, almost twice as fast as
-    ZEO. With memcached support enabled, write performance took a small
-    hit due to the time spent storing objects in memcached.
+    transaction. In the sample output above, MySQL was able to add
+    10027 objects per second to the database, almost twice as fast as
+    ZEO, which was limited to 5212 objects per second. Also, with
+    memcached support enabled, MySQL write performance took a small hit
+    due to the time spent storing objects in memcached.
+
+* Update objects
+
+    In the same process, without clearing any caches, ``zodbshootout``
+    makes a simple change to each of the objects just added and commits
+    the transaction.  The sample output above shows that MySQL and ZEO
+    typically take a little longer to update objects than to add new
+    objects, while PostgreSQL is faster at updating objects in this case.
+    The sample tests only history-preserving databases; you may see
+    different results with history-free databases.
 
 * Read warm objects
 
     In a different process, without clearing any caches,
-    ``zodbshootout`` reads all of the objects just written. This test
+    ``zodbshootout`` reads all of the objects just added. This test
     favors databases that use either a persistent cache or a cache
     shared by multiple processes (such as memcached). In the sample
     output above, this test with MySQL and memcached runs more than ten
@@ -166,32 +190,25 @@ writing or reading under the given conditions.
     In the same process as was used for reading warm objects,
     ``zodbshootout`` clears all ZODB caches (the pickle cache, the ZEO
     cache, and/or memcached) then reads all of the objects written by
-    the write test. This test favors databases that read objects
+    the update test. This test favors databases that read objects
     quickly, independently of caching. In the sample output above,
     MySQL cheats a little because it uses a query cache.
 
 * Read hot objects
 
     In the same process as was used for reading cold objects,
-    ``zodbshootout`` clears only the in-memory ZODB caches (the pickle
-    cache) then reads all of the objects written by the write test.
-    This test favors databases that have a process-specific cache. In
-    the sample output above, all of the databases have that type of
-    cache.
+    ``zodbshootout`` clears the in-memory ZODB caches (the pickle
+    cache), but leaves the other caches intact, then reads all of the
+    objects written by the update test. This test favors databases that
+    have a process-specific cache. In the sample output above, all of
+    the databases have that type of cache.
 
 * Read steamin' objects
 
     In the same process as was used for reading hot objects,
     ``zodbshootout`` once again reads all of the objects written by the
-    write test. This test favors databases that take advantage of the
+    update test. This test favors databases that take advantage of the
     ZODB pickle cache. As can be seen from the sample output above,
-    accessing an object from the ZODB pickle cache is much faster than
-    any operation that requires network access or unpickling.
-
-Known Issues
-------------
-
-This application seems to freeze with Python versions before 2.6, most
-likely due to some issue connected with the backported version of the
-``multiprocessing`` module. Assistance in finding a resolution would be
-greatly appreciated.
+    accessing an object from the ZODB pickle cache is around 100
+    times faster than any operation that requires network access or
+    unpickling.
