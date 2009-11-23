@@ -40,8 +40,8 @@ using ``virtualenv``::
 
     $ virtualenv --no-site-packages .
 
-Install Buildout in that environment, which will create a script
-named ``bin/buildout``::
+Install Buildout in that environment.  (This command will create a script
+named ``bin/buildout``.)::
 
     $ bin/easy_install zc.buildout
 
