@@ -1,7 +1,7 @@
 Next release
 ------------
 
-- ...
+- Updated to MySql 5.1.46 and a new download url - the old was giving 401's.
 
 0.2 (2009-11-17)
 ----------------
