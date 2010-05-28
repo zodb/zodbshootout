@@ -1,6 +1,8 @@
 Next release
 ------------
 
+- Updated to memcached 1.4.5 and libmemcached 0.40.
+
 - Updated to PostgreSQL 8.4.4.
 
 - Updated to MySql 5.1.46 and a new download url - the old was giving 401's.
