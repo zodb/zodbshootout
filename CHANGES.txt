@@ -1,11 +1,11 @@
-Next release
-------------
+0.3 (2010-06-19)
+----------------
 
-- Updated to memcached 1.4.5 and libmemcached 0.40.
+- Updated to memcached 1.4.5, libmemcached 0.40, and pylibmc 1.1+.
 
 - Updated to PostgreSQL 8.4.4.
 
-- Updated to MySql 5.1.46 and a new download url - the old was giving 401's.
+- Updated to MySQL 5.1.47 and a new download url - the old was giving 401's.
 
 0.2 (2009-11-17)
 ----------------
