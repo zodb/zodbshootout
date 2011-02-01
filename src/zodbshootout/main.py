@@ -25,6 +25,7 @@ from StringIO import StringIO
 from zodbshootout.fork import ChildProcessError
 from zodbshootout.fork import distribute
 from zodbshootout.fork import run_in_child
+import cPickle
 import optparse
 import os
 import sys
@@ -51,13 +52,24 @@ class PObject(Persistent):
     """A trivial persistent object"""
     attr = 1
 
+    def __init__(self, data):
+        self.data = data
+
+
+# Estimate the size of a minimal PObject stored in ZODB.
+pobject_base_size = (
+    len(cPickle.dumps(PObject)) + len(cPickle.dumps(PObject(''))))
+
+
 class SpeedTest:
 
-    def __init__(self, concurrency, objects_per_txn, profile_dir=None):
+    def __init__(self, concurrency, objects_per_txn, object_size,
+            profile_dir=None):
         self.concurrency = concurrency
         self.objects_per_txn = objects_per_txn
+        data = 'x' * max(0, object_size - pobject_base_size)
         self.data_to_store = dict(
-            (n, PObject()) for n in range(objects_per_txn))
+            (n, PObject(data)) for n in range(objects_per_txn))
         self.profile_dir = profile_dir
         self.contender_name = None
         self.rep = 0  # repetition number
@@ -259,6 +271,10 @@ def main(argv=None):
         help="Object counts to use, separated by commas (default 1000)",
         )
     parser.add_option(
+        "-s", "--object-size", dest="object_size", default="115",
+        help="Size of each object in bytes (estimated, default approx. 115)",
+        )
+    parser.add_option(
         "-c", "--concurrency", dest="concurrency", default="2",
         help="Concurrency levels to use, separated by commas (default 2)",
         )
@@ -274,6 +290,7 @@ def main(argv=None):
 
     object_counts = [int(x.strip())
                      for x in options.counts.split(',')]
+    object_size = max(int(options.object_size), pobject_base_size)
     concurrency_levels = [int(x.strip())
                           for x in options.concurrency.split(',')]
     profile_dir = options.profile_dir
@@ -306,11 +323,14 @@ def main(argv=None):
     try:
         for objects_per_txn in object_counts:
             for concurrency in concurrency_levels:
-                speedtest = SpeedTest(concurrency, objects_per_txn, profile_dir)
+                speedtest = SpeedTest(
+                    concurrency, objects_per_txn, object_size, profile_dir)
                 for contender_name, db in contenders:
                     print >> sys.stderr, (
-                        'Testing %s with objects_per_txn=%d and concurrency=%d'
-                        % (contender_name, objects_per_txn, concurrency))
+                        'Testing %s with objects_per_txn=%d, object_size=%d, '
+                        'and concurrency=%d'
+                        % (contender_name, objects_per_txn, object_size,
+                            concurrency))
                     db_factory = db.open
                     key = (objects_per_txn, concurrency, contender_name)
 
