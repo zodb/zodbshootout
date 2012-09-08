@@ -1,0 +1,15 @@
+*.pyc
+.installed.cfg
+.mr.developer.cfg
+.pydevproject
+bin
+develop-eggs
+download
+eggs
+include
+lib
+parts
+var
+etc/my.cnf
+etc/zeo.conf
+src/relstorage/
