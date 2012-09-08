@@ -4,6 +4,8 @@
 - Updated to MySQL 5.1.65, PostgreSQL 9.1.5, memcached 1.4.15,
   and libmemcached 1.0.10.
 
+- Moved development to github.
+
 0.4 (2011-02-01)
 ----------------
 
