@@ -1,3 +1,4 @@
+from __future__ import print_function
 ##############################################################################
 #
 # Copyright (c) 2009 Zope Foundation and Contributors.
@@ -21,11 +22,11 @@ interpreter lock.
 
 from persistent import Persistent
 from persistent.mapping import PersistentMapping
-from StringIO import StringIO
+from six import StringIO
 from zodbshootout.fork import ChildProcessError
 from zodbshootout.fork import distribute
 from zodbshootout.fork import run_in_child
-import cPickle
+from six.moves import cPickle
 import optparse
 import os
 import sys
@@ -92,7 +93,7 @@ class SpeedTest:
         conn.close()
         db.close()
         if debug:
-            print >> sys.stderr, 'Populated storage.'
+            print('Populated storage.', file=sys.stderr)
 
     def write_test(self, db_factory, n, sync):
         db = db_factory()
@@ -116,7 +117,7 @@ class SpeedTest:
             start = time.time()
             conn = db.open()
             root = conn.root()
-            for obj in conn.root()['speedtest'][n].itervalues():
+            for obj in conn.root()['speedtest'][n].values():
                 obj.attr = 1
             transaction.commit()
             conn.close()
@@ -138,7 +139,7 @@ class SpeedTest:
             start = time.time()
             conn = db.open()
             got = 0
-            for obj in conn.root()['speedtest'][n].itervalues():
+            for obj in conn.root()['speedtest'][n].values():
                 got += obj.attr
             del obj
             if got != self.objects_per_txn:
@@ -326,11 +327,11 @@ def main(argv=None):
                 speedtest = SpeedTest(
                     concurrency, objects_per_txn, object_size, profile_dir)
                 for contender_name, db in contenders:
-                    print >> sys.stderr, (
+                    print(
                         'Testing %s with objects_per_txn=%d, object_size=%d, '
                         'and concurrency=%d'
                         % (contender_name, objects_per_txn, object_size,
-                            concurrency))
+                           concurrency), file=sys.stderr)
                     db_factory = db.open
                     key = (objects_per_txn, concurrency, contender_name)
 
@@ -339,7 +340,7 @@ def main(argv=None):
                             msg = '  Running %d/%d...' % (rep + 1, repetitions)
                             if attempt > 0:
                                 msg += ' (attempt %d)' % (attempt + 1)
-                            print >> sys.stderr, msg,
+                            print(msg, file=sys.stderr, end='')
                             try:
                                 times = speedtest.run(
                                     db.open, contender_name, rep)
@@ -353,7 +354,7 @@ def main(argv=None):
                             'warm %6.4fs, cold %6.4fs, '
                             'hot %6.4fs, steamin %6.4fs'
                             % times)
-                        print >> sys.stderr, msg
+                        print(msg, file=sys.stderr)
                         for i in range(6):
                             results[key + (i,)].append(times[i])
 
@@ -362,14 +363,14 @@ def main(argv=None):
     finally:
 
         # show the results in CSV format
-        print >> sys.stderr
-        print >> sys.stderr, (
+        print(file=sys.stderr)
+        print(
             'Results show objects written or read per second. '
-            'Best of 3.')
+            'Best of 3.', file=sys.stderr)
 
         for concurrency in concurrency_levels:
-            print
-            print '** concurrency=%d **' % concurrency
+            print()
+            print('** concurrency=%d **' % concurrency)
 
             rows = []
             row = ['"Transaction"']
@@ -396,7 +397,7 @@ def main(argv=None):
                     rows.append(row)
 
             for line in align_columns(rows):
-                print line
+                print(line)
 
 
 if __name__ == '__main__':

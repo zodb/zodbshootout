@@ -22,6 +22,7 @@ import sys
 install_requires=[
     'setuptools',
     'ZODB3',
+    'six',
 ]
 
 if sys.version_info < (2, 6):
