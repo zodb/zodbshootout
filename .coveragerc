@@ -2,6 +2,7 @@
 source = zodbshootout
 omit =
 parallel = True
+concurrency = multiprocessing
 
 [report]
 # Coverage is run on Linux under cPython 2 and 3,
