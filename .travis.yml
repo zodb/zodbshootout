@@ -18,7 +18,7 @@ matrix:
   fast_finish: true
 script:
 #  - if [[ $TRAVIS_PYTHON_VERSION == 'pypy' ]]; then python -m relstorage.tests.alltests -v; fi
-  - if [[ $TRAVIS_PYTHON_VERSION != 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 4 -n 100 .travis/$ENV.conf -v; fi
+  - if [[ $TRAVIS_PYTHON_VERSION != 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 4 -n 100 .travis/$ENV.conf ; fi
 after_success:
   - coverage combine
   - coveralls
