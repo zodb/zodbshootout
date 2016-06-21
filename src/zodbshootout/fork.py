@@ -14,11 +14,12 @@
 """Multiprocessing utilities.
 """
 
+from __future__ import absolute_import
 from multiprocessing import Process
 from multiprocessing import Queue
-from Queue import Empty
-import sys
+from six.moves.queue import Empty
 import time
+
 
 # message_delay contains the maximum expected message delay.  If a message
 # takes longer than this to deliver to a child process, synchronized
@@ -59,7 +60,7 @@ class Child(object):
             res = self.func(self.param, self.sync)
         except (SystemExit, KeyboardInterrupt):
             return
-        except Exception, e:
+        except Exception as e:
             self.parent_queue.put((
                 self.child_num, 'exception', '%s: %s' % (type(e), str(e))))
         else:
@@ -101,7 +102,7 @@ def distribute(func, param_iter):
     for child_num, param in enumerate(param_iter):
         child = Child(child_num, parent_queue, func, param)
         children[child_num] = child
-    for child in children.itervalues():
+    for child in children.values():
         child.process.start()
 
     try:
@@ -114,7 +115,7 @@ def distribute(func, param_iter):
                 child_num, msg, arg = parent_queue.get(timeout=1)
             except Empty:
                 # While we're waiting, see if any children have died.
-                for child in children.itervalues():
+                for child in children.values():
                     if not child.process.is_alive():
                         raise ChildProcessError(
                             "process running %r failed with exit code %d" % (
@@ -137,14 +138,14 @@ def distribute(func, param_iter):
                 # All children have called sync(), so tell them
                 # to resume shortly and set up for another sync.
                 resume_time = time.time() + message_delay
-                for child in children.itervalues():
+                for child in children.values():
                     child.child_queue.put(resume_time)
                 sync_waiting = set(children)
 
         return results
 
     finally:
-        for child in children.itervalues():
+        for child in children.values():
             child.process.terminate()
             child.process.join()
         parent_queue.close()
