@@ -3,6 +3,9 @@
 .installed.cfg
 .mr.developer.cfg
 .pydevproject
+.dir-locals.el
+htmlcov
+.coverage
 bin
 develop-eggs
 dist
