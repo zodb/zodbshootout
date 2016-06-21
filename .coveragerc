@@ -1,0 +1,24 @@
+[run]
+source = zodbshootout
+omit =
+parallel = True
+concurrency = multiprocessing
+
+[report]
+# Coverage is run on Linux under cPython 2 and 3,
+# against MySQL and PostgreSQL, so
+# exclude branches that are windows, pypy or oracle
+# specific
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if PYPY:
+    if sys.platform == 'win32':
+    if mswindows:
+    if is_windows:
+    def oracle_
+    class CXOracle
+    class Oracle

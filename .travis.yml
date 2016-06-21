@@ -1,0 +1,43 @@
+language: python
+sudo: false
+services:
+  - mysql
+  - postgresql
+addons:
+# Use postgresql 9.3 to get commit-lock testing
+  postgresql: "9.3"
+python:
+  - 2.7
+#  - 3.4
+#  - pypy
+env:
+  matrix:
+    - ENV=mysql
+    - ENV=postgres
+    - ENV=file
+matrix:
+  fast_finish: true
+script:
+#  - if [[ $TRAVIS_PYTHON_VERSION == 'pypy' ]]; then python -m relstorage.tests.alltests -v; fi
+  - if [[ $TRAVIS_PYTHON_VERSION != 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 1 -n 100 .travis/$ENV.conf ; fi
+after_success:
+  - coverage combine
+  - coveralls
+notifications:
+  email: false
+
+install:
+  - pip install -U pip
+  - pip install -U tox coveralls zope.testing mock coverage
+  - pip install -U -e .
+  - .travis/setup-$ENV.sh
+# cache: pip seems not to work if `install` is replaced (https://github.com/travis-ci/travis-ci/issues/3239)
+cache:
+  directories:
+    - $HOME/.cache/pip
+    - $HOME/.venv
+    - $HOME/.runtimes
+    - $HOME/.wheelhouse
+
+before_cache:
+    - rm -f $HOME/.cache/pip/log/debug.log

@@ -13,23 +13,21 @@
 ##############################################################################
 """A ZODB performance test"""
 
-version = "0.5"
+version = "0.6.dev0"
 
 from setuptools import setup, find_packages
 import os
-import sys
 
-install_requires=[
+install_requires = [
     'setuptools',
-    'ZODB3',
+    'ZODB',
+    'ZEO'
 ]
-
-if sys.version_info < (2, 6):
-    install_requires.append('multiprocessing')
 
 def read_file(*path):
     base_dir = os.path.dirname(__file__)
-    return open(os.path.join(base_dir, *tuple(path))).read()
+    with open(os.path.join(base_dir, *tuple(path))) as f:
+        return f.read()
 
 setup(
     name='zodbshootout',
@@ -48,7 +46,26 @@ setup(
     platforms='Any',
     zip_safe=False,
     install_requires=install_requires,
-    entry_points={'console_scripts': [
-        'zodbshootout = zodbshootout.main:main',
-        ]},
+    entry_points={
+        'console_scripts': [
+            'zodbshootout = zodbshootout.main:main',
+        ]
+    },
+    extras_require={
+        'mysql': ['relstorage[mysql]'],
+        'postgresql': ['relstorage[postgresql]'],
+        'oracle': ['relstorage[oracle]'],
+    },
+    classifiers=[
+        "Programming Language :: Python :: 2.7",
+        #"Programming Language :: Python :: 3.4",
+        #"Programming Language :: Python :: 3.5",
+        "Programming Language :: Python :: Implementation :: CPython",
+        #"Programming Language :: Python :: Implementation :: PyPy",
+        "Operating System :: MacOS :: MacOS X",
+        "Operating System :: POSIX",
+        "Intended Audience :: Developers",
+        "Development Status :: 4 - Beta"
+    ],
+
 )
