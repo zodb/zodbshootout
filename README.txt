@@ -11,14 +11,6 @@ environment with sample tests.
 
 .. contents::
 
-Known Issues
-------------
-
-This application seems to freeze with Python versions before 2.6, most
-likely due to some issue connected with the backported version of the
-``multiprocessing`` module. Assistance in finding a resolution would be
-greatly appreciated.
-
 Installing ``zodbshootout`` using Buildout
 ------------------------------------------
 
