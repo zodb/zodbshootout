@@ -33,7 +33,7 @@ setup(
     name='zodbshootout',
     version=version,
     description=__doc__,
-    long_description=read_file("README.txt"),
+    long_description=read_file("README.rst"),
     url='https://github.com/zodb/zodbshootout',
     keywords='ZODB ZEO RelStorage',
     author='Shane Hathaway',
