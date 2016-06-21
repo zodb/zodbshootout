@@ -32,7 +32,6 @@ import os
 import sys
 import time
 import transaction
-#import warnings
 import ZConfig
 
 try:
@@ -47,9 +46,6 @@ def itervalues(d):
         iv = d.values
     return iv()
 
-
-#warnings.filterwarnings("ignore", "the sha module is deprecated",
-#    DeprecationWarning)
 
 debug = False
 repetitions = 3
