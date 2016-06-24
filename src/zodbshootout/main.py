@@ -20,20 +20,18 @@ interpreter lock.
 """
 from __future__ import print_function, absolute_import
 
-from persistent import Persistent
-from persistent.mapping import PersistentMapping
+
 from io import StringIO
 from .fork import ChildProcessError
-from .fork import distribute
-from .fork import run_in_child
+
 from .speedtest import SpeedTest
 from .speedtest import pobject_base_size
-from ZODB._compat import dumps
+
 import argparse
 import os
 import sys
-import time
-import transaction
+
+
 import ZConfig
 
 try:
@@ -49,8 +47,6 @@ def itervalues(d):
     return iv()
 
 
-debug = False
-repetitions = 3
 max_attempts = 20
 
 schema_xml = u"""
@@ -107,6 +103,11 @@ def main(argv=None):
         help="Size of each object in bytes (estimated, default approx. %d)" % pobject_base_size,
         )
     parser.add_argument(
+        '-r', '--repetitions', default=3,
+        type=int,
+        help="Number of repetitions of the complete test. The best values out of this many "
+        "repetitions will be displayed. Default is 3.")
+    parser.add_argument(
         "-c", "--concurrency", dest="concurrency",
         type=int,
         action="append",
@@ -130,6 +131,7 @@ def main(argv=None):
     object_size = max(options.object_size, pobject_base_size)
     concurrency_levels = options.concurrency or [2]
     profile_dir = options.profile_dir
+    repetitions = options.repetitions
     if profile_dir and not os.path.exists(profile_dir):
         os.makedirs(profile_dir)
 
@@ -207,9 +209,9 @@ def main(argv=None):
 
         # show the results in CSV format
         print(file=sys.stderr)
-        print((
+        print(
             'Results show objects written or read per second. '
-            'Best of 3.'), file=sys.stderr)
+            'Best of', repetitions, file=sys.stderr)
 
         for concurrency in concurrency_levels:
             print()

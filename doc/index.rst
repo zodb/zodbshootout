@@ -133,6 +133,12 @@ The ``zodbshootout`` script accepts the following options.
   This option is especially interesting on PyPy or when comparing the
   pure-Python implementation of BTrees to the C implementation.
 
+* ``-r`` (``--repetitions``) determines how many iterations of the
+  test suite will be compared together to find the best time. Higher
+  values can reduce jitter. Higher values are especially useful on
+  platforms that have a warmup period (like PyPy's JIT). The default
+  is 3.
+
 .. command-output:: zodbshootout --help
 
 You should write a configuration file that models your intended
