@@ -139,6 +139,12 @@ The ``zodbshootout`` script accepts the following options.
   platforms that have a warmup period (like PyPy's JIT). The default
   is 3.
 
+* ``--threads`` uses in-process threads for concurrency instead of
+  multiprocessing. This can demonstrate how the GIL affects various
+  database adapters under RelStorage, for instance. It can also have
+  demonstrate the difference that warmup time makes for things like
+  PyPy's JIT.
+
 .. command-output:: zodbshootout --help
 
 You should write a configuration file that models your intended

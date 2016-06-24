@@ -56,12 +56,14 @@ class SpeedTest(object):
     debug = False
 
     def __init__(self, concurrency, objects_per_txn, object_size,
-                 profile_dir=None):
+                 profile_dir=None,
+                 mp_strategy='mp'):
         self.concurrency = concurrency
         self.objects_per_txn = objects_per_txn
         self.object_size = object_size
         self.profile_dir = profile_dir
         self.contender_name = None
+        self.mp_strategy = mp_strategy
         self.rep = 0  # repetition number
 
     @property
@@ -202,7 +204,7 @@ class SpeedTest(object):
         self.contender_name = contender_name
         self.rep = rep
 
-        run_in_child(self.populate, db_factory)
+        run_in_child(self.populate, self.mp_strategy, db_factory)
 
         def write(n, sync):
             return self.write_test(db_factory, n, sync)
@@ -210,8 +212,8 @@ class SpeedTest(object):
             return self.read_test(db_factory, n, sync)
 
         r = list(range(self.concurrency))
-        write_times = distribute(write, r)
-        read_times = distribute(read, r)
+        write_times = distribute(write, r, strategy=self.mp_strategy)
+        read_times = distribute(read, r, strategy=self.mp_strategy)
 
         add_times = [t[0] for t in write_times]
         update_times = [t[1] for t in write_times]

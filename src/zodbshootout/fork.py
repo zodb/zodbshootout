@@ -15,11 +15,19 @@
 """
 
 from __future__ import absolute_import
-from multiprocessing import Process
-from multiprocessing import Queue
+from multiprocessing import Process as MPProcess
+from multiprocessing import Queue as MPQueue
+
+from threading import Thread as MTProcess
+from six.moves.queue import Queue as MTQueue
+
 from six.moves.queue import Empty
 import time
 
+strategies = {
+    'threads': (MTProcess, MTQueue),
+    'mp': (MPProcess, MPQueue)
+}
 
 # message_delay contains the maximum expected message delay.  If a message
 # takes longer than this to deliver to a child process, synchronized
@@ -32,22 +40,24 @@ class ChildProcessError(Exception):
     """A child process failed"""
 
 
-def run_in_child(func, *args, **kw):
+def run_in_child(func, strategy, *args, **kw):
     """Call a function in a child process.  Don't return anything.
 
     Raises an exception if the child process fails.
     """
+    Process = strategies[strategy][0]
+
     p = Process(target=func, args=args, kwargs=kw)
     p.start()
     p.join()
-    if p.exitcode:
+    if hasattr(p, 'exitcode') and p.exitcode:
         raise ChildProcessError(
             "process running %r failed with exit code %d" % (func, p.exitcode))
 
 
 class Child(object):
 
-    def __init__(self, child_num, parent_queue, func, param):
+    def __init__(self, child_num, parent_queue, func, param, Process, Queue):
         self.child_num = child_num
         self.parent_queue = parent_queue
         self.func = func
@@ -84,7 +94,7 @@ class Child(object):
             pass
 
 
-def distribute(func, param_iter):
+def distribute(func, param_iter, strategy='mp'):
     """Call a function in separate processes concurrently.
 
     param_iter is an iterator that provides the first parameter for
@@ -97,10 +107,14 @@ def distribute(func, param_iter):
     is returned once all functions have returned.  If any function
     raises an error, this raises AssertionError.
     """
+
+    Process = strategies[strategy][0]
+    Queue = strategies[strategy][1]
+
     children = {}
     parent_queue = Queue()
     for child_num, param in enumerate(param_iter):
-        child = Child(child_num, parent_queue, func, param)
+        child = Child(child_num, parent_queue, func, param, Process, Queue)
         children[child_num] = child
     for child in children.values():
         child.process.start()
@@ -146,6 +160,8 @@ def distribute(func, param_iter):
 
     finally:
         for child in children.values():
-            child.process.terminate()
+            if hasattr(child.process, 'terminate'):
+                child.process.terminate()
             child.process.join()
-        parent_queue.close()
+        if hasattr(parent_queue, 'close'):
+            parent_queue.close()

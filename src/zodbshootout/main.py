@@ -122,6 +122,9 @@ def main(argv=None):
         choices=['IO', 'OO'],
         help="Use BTrees. An argument, if given, is the family name to use, either IO or OO."
         " Specifying --btrees by itself will use an IO BTree; not specifying it will use PersistentMapping.")
+    parser.add_argument(
+        "--threads", action='store_true', default=False,
+        help="Use threads instead of multiprocessing")
     parser.add_argument("config_file", type=argparse.FileType())
 
     options = parser.parse_args(argv)
@@ -162,7 +165,8 @@ def main(argv=None):
         for objects_per_txn in object_counts:
             for concurrency in concurrency_levels:
                 speedtest = SpeedTest(
-                    concurrency, objects_per_txn, object_size, profile_dir)
+                    concurrency, objects_per_txn, object_size, profile_dir,
+                    'threads' if options.threads else 'mp')
                 if options.btrees:
                     import BTrees
                     if options.btrees == 'IO':
@@ -173,10 +177,10 @@ def main(argv=None):
                 for contender_name, db in contenders:
                     print((
                         'Testing %s with objects_per_txn=%d, object_size=%d, '
-                        'mappingtype=%s and concurrency=%d'
+                        'mappingtype=%s and concurrency=%d (threads? %s)'
                         % (contender_name, objects_per_txn, object_size,
                            speedtest.MappingType,
-                            concurrency)), file=sys.stderr)
+                            concurrency, options.threads)), file=sys.stderr)
 
                     key = (objects_per_txn, concurrency, contender_name)
 
