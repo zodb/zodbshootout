@@ -27,7 +27,7 @@ from zodbshootout.fork import ChildProcessError
 from zodbshootout.fork import distribute
 from zodbshootout.fork import run_in_child
 from ZODB._compat import dumps
-import optparse
+import argparse
 import os
 import sys
 import time
@@ -275,40 +275,42 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
 
-    parser = optparse.OptionParser(usage='%prog [options] config_file')
-    parser.add_option(
-        "-n", "--object-counts", dest="counts", default="1000",
-        help="Object counts to use, separated by commas (default 1000)",
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-n", "--object-counts", dest="counts",
+        type=int,
+        action="append",
+        help="Object counts to use (default 1000). Use this option as many times as you want.",
         )
-    parser.add_option(
-        "-s", "--object-size", dest="object_size", default="115",
+    parser.add_argument(
+        "-s", "--object-size", dest="object_size", default=115,
+        type=int,
         help="Size of each object in bytes (estimated, default approx. 115)",
         )
-    parser.add_option(
-        "-c", "--concurrency", dest="concurrency", default="2",
-        help="Concurrency levels to use, separated by commas (default 2)",
+    parser.add_argument(
+        "-c", "--concurrency", dest="concurrency",
+        type=int,
+        action="append",
+        help="Concurrency levels to use. Default is 2. Use this option as many times as you want."
         )
-    parser.add_option(
+    parser.add_argument(
         "-p", "--profile", dest="profile_dir", default="",
         help="Profile all tests and output results to the specified directory",
         )
+    parser.add_argument("config_file", type=argparse.FileType())
 
-    options, args = parser.parse_args(argv)
-    if len(args) != 1:
-        parser.error("exactly one database configuration file is required")
-    conf_fn = args[0]
+    options = parser.parse_args(argv)
+    conf_fn = options.config_file
 
-    object_counts = [int(x.strip())
-                     for x in options.counts.split(',')]
-    object_size = max(int(options.object_size), pobject_base_size)
-    concurrency_levels = [int(x.strip())
-                          for x in options.concurrency.split(',')]
+    object_counts = options.counts or [1000]
+    object_size = max(options.object_size, pobject_base_size)
+    concurrency_levels = options.concurrency or [2]
     profile_dir = options.profile_dir
     if profile_dir and not os.path.exists(profile_dir):
         os.makedirs(profile_dir)
 
     schema = ZConfig.loadSchemaFile(StringIO(schema_xml))
-    config, _handler = ZConfig.loadConfig(schema, conf_fn)
+    config, _handler = ZConfig.loadConfigFile(schema, conf_fn)
     contenders = [(db.name, db) for db in config.databases]
 
     txn_descs = (
