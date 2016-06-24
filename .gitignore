@@ -19,3 +19,7 @@ etc/my.cnf
 etc/zeo.conf
 src/relstorage
 src/ZODB-perfmetrics
+
+doc/_build
+doc/__pycache__
+doc/changelog.rst
