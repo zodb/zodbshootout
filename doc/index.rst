@@ -121,6 +121,18 @@ The ``zodbshootout`` script accepts the following options.
   This option is intended to help developers isolate performance
   bottlenecks.
 
+* ``--btrees`` causes the data to be stored in the BTrees optimized
+  for ZODB usage (without this option, a PersistentMapping will be
+  used). This is an advanced option that may be useful when tuning
+  particular applications and usage scenarios. This adds additional
+  objects to manage the buckets that make up the BTree. However, if
+  IO BTrees are used (the default when this option is specified)
+  internal storage of keys as integers may reduce pickle times and
+  sizes (and thus improve cache efficiency). This option can take an
+  argument of either IO or OO to specify the type of BTree to use.
+  This option is especially interesting on PyPy or when comparing the
+  pure-Python implementation of BTrees to the C implementation.
+
 .. command-output:: zodbshootout --help
 
 You should write a configuration file that models your intended

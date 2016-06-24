@@ -23,9 +23,11 @@ from __future__ import print_function, absolute_import
 from persistent import Persistent
 from persistent.mapping import PersistentMapping
 from io import StringIO
-from zodbshootout.fork import ChildProcessError
-from zodbshootout.fork import distribute
-from zodbshootout.fork import run_in_child
+from .fork import ChildProcessError
+from .fork import distribute
+from .fork import run_in_child
+from .speedtest import SpeedTest
+from .speedtest import pobject_base_size
 from ZODB._compat import dumps
 import argparse
 import os
@@ -57,189 +59,6 @@ schema_xml = u"""
   <multisection type="ZODB.database" name="*" attribute="databases" />
 </schema>
 """
-
-class PObject(Persistent):
-    """A trivial persistent object"""
-    attr = 1
-
-    def __init__(self, data):
-        self.data = data
-
-
-# Estimate the size of a minimal PObject stored in ZODB.
-pobject_base_size = (
-    len(dumps(PObject)) + len(dumps(PObject(b''))))
-
-
-class SpeedTest:
-
-    def __init__(self, concurrency, objects_per_txn, object_size,
-                 profile_dir=None):
-        self.concurrency = concurrency
-        self.objects_per_txn = objects_per_txn
-        data = b'x' * max(0, object_size - pobject_base_size)
-        self.data_to_store = dict(
-            (n, PObject(data)) for n in range(objects_per_txn))
-        self.profile_dir = profile_dir
-        self.contender_name = None
-        self.rep = 0  # repetition number
-
-    def populate(self, db_factory):
-        db = db_factory()
-        conn = db.open()
-        root = conn.root()
-
-        # clear the database
-        root['speedtest'] = None
-        transaction.commit()
-        db.pack()
-
-        # put a tree in the database
-        root['speedtest'] = t = PersistentMapping()
-        for i in range(self.concurrency):
-            t[i] = PersistentMapping()
-        transaction.commit()
-        conn.close()
-        db.close()
-        if debug:
-            print('Populated storage.', file=sys.stderr)
-
-    def write_test(self, db_factory, n, sync):
-        db = db_factory()
-
-        def do_add():
-            start = time.time()
-            conn = db.open()
-            root = conn.root()
-            m = root['speedtest'][n]
-            m.update(self.data_to_store)
-            transaction.commit()
-            conn.close()
-            end = time.time()
-            return end - start
-
-        db.open().close()
-        sync()
-        add_time = self._execute(do_add, 'add', n)
-
-        def do_update():
-            start = time.time()
-            conn = db.open()
-            root = conn.root()
-            for obj in itervalues(conn.root()['speedtest'][n]):
-                obj.attr = 1
-            transaction.commit()
-            conn.close()
-            end = time.time()
-            return end - start
-
-        sync()
-        update_time = self._execute(do_update, 'update', n)
-
-        time.sleep(.1)
-        db.close()
-        return add_time, update_time
-
-    def read_test(self, db_factory, n, sync):
-        db = db_factory()
-        db.setCacheSize(len(self.data_to_store)+400)
-
-        def do_read():
-            start = time.time()
-            conn = db.open()
-            got = 0
-            for obj in itervalues(conn.root()['speedtest'][n]):
-                got += obj.attr
-            del obj
-            if got != self.objects_per_txn:
-                raise AssertionError('data mismatch')
-            conn.close()
-            end = time.time()
-            return end - start
-
-        db.open().close()
-        sync()
-        warm = self._execute(do_read, 'warm', n)
-
-        # Clear all caches
-        conn = db.open()
-        conn.cacheMinimize()
-        storage = conn._storage
-        if hasattr(storage, '_cache'):
-            storage._cache.clear()
-        conn.close()
-
-        sync()
-        cold = self._execute(do_read, 'cold', n)
-
-        conn = db.open()
-        conn.cacheMinimize()
-        conn.close()
-
-        sync()
-        hot = self._execute(do_read, 'hot', n)
-        sync()
-        steamin = self._execute(do_read, 'steamin', n)
-
-        db.close()
-        return warm, cold, hot, steamin
-
-    def _execute(self, func, phase_name, n):
-        if not self.profile_dir:
-            return func()
-        basename = '%s-%s-%d-%02d-%d' % (
-            self.contender_name, phase_name, self.objects_per_txn, n, self.rep)
-        txt_fn = os.path.join(self.profile_dir, basename + ".txt")
-        prof_fn = os.path.join(self.profile_dir, basename + ".prof")
-        import cProfile
-        output = []
-        d = {'_func': func, '_output': output}
-        cProfile.runctx("_output.append(_func())", d, d, prof_fn)
-        res = output[0]
-        from pstats import Stats
-        f = open(txt_fn, 'w')
-        st = Stats(prof_fn, stream=f)
-        st.strip_dirs()
-        st.sort_stats('cumulative')
-        st.print_stats()
-        f.close()
-        return res
-
-    def run(self, db_factory, contender_name, rep):
-        """Run a write and read test.
-
-        Returns the mean time per transaction for 4 phases:
-        write, cold read, hot read, and steamin' read.
-        """
-        self.contender_name = contender_name
-        self.rep = rep
-
-        run_in_child(self.populate, db_factory)
-
-        def write(n, sync):
-            return self.write_test(db_factory, n, sync)
-        def read(n, sync):
-            return self.read_test(db_factory, n, sync)
-
-        r = list(range(self.concurrency))
-        write_times = distribute(write, r)
-        read_times = distribute(read, r)
-
-        add_times = [t[0] for t in write_times]
-        update_times = [t[1] for t in write_times]
-        warm_times = [t[0] for t in read_times]
-        cold_times = [t[1] for t in read_times]
-        hot_times = [t[2] for t in read_times]
-        steamin_times = [t[3] for t in read_times]
-
-        return (
-            sum(add_times) / self.concurrency,
-            sum(update_times) / self.concurrency,
-            sum(warm_times) / self.concurrency,
-            sum(cold_times) / self.concurrency,
-            sum(hot_times) / self.concurrency,
-            sum(steamin_times) / self.concurrency,
-            )
 
 
 def align_columns(rows):
@@ -283,9 +102,9 @@ def main(argv=None):
         help="Object counts to use (default 1000). Use this option as many times as you want.",
         )
     parser.add_argument(
-        "-s", "--object-size", dest="object_size", default=115,
+        "-s", "--object-size", dest="object_size", default=pobject_base_size,
         type=int,
-        help="Size of each object in bytes (estimated, default approx. 115)",
+        help="Size of each object in bytes (estimated, default approx. %d)" % pobject_base_size,
         )
     parser.add_argument(
         "-c", "--concurrency", dest="concurrency",
@@ -297,6 +116,11 @@ def main(argv=None):
         "-p", "--profile", dest="profile_dir", default="",
         help="Profile all tests and output results to the specified directory",
         )
+    parser.add_argument(
+        "--btrees", nargs="?", const="IO", default=False,
+        choices=['IO', 'OO'],
+        help="Use BTrees. An argument, if given, is the family name to use, either IO or OO."
+        " Specifying --btrees by itself will use an IO BTree; not specifying it will use PersistentMapping.")
     parser.add_argument("config_file", type=argparse.FileType())
 
     options = parser.parse_args(argv)
@@ -337,11 +161,19 @@ def main(argv=None):
             for concurrency in concurrency_levels:
                 speedtest = SpeedTest(
                     concurrency, objects_per_txn, object_size, profile_dir)
+                if options.btrees:
+                    import BTrees
+                    if options.btrees == 'IO':
+                        speedtest.MappingType = BTrees.family64.IO.BTree
+                    else:
+                        speedtest.MappingType = BTrees.family64.OO.BTree
+
                 for contender_name, db in contenders:
                     print((
                         'Testing %s with objects_per_txn=%d, object_size=%d, '
-                        'and concurrency=%d'
+                        'mappingtype=%s and concurrency=%d'
                         % (contender_name, objects_per_txn, object_size,
+                           speedtest.MappingType,
                             concurrency)), file=sys.stderr)
 
                     key = (objects_per_txn, concurrency, contender_name)
