@@ -1,0 +1,82 @@
+==========================
+ Running ``zodbshootout``
+==========================
+
+The ``zodbshootout`` script accepts the name of a database
+configuration file. The configuration file contains a list of databases
+to test, in ZConfig format. The script deletes all data from each of
+the databases, then writes and reads the databases while taking
+measurements. Finally, the script produces a tabular summary of objects
+written or read per second in each configuration. ``zodbshootout`` uses
+the names of the databases defined in the configuration file as the
+table column names.
+
+**Warning**: Again, ``zodbshootout`` **deletes all data** from all
+databases specified in the configuration file. Do not configure it to
+open production databases!
+
+The ``zodbshootout`` script accepts the following options.
+
+.. command-output:: zodbshootout --help
+
+* ``-n`` (``--object-counts``) specifies how many persistent objects to
+  write or read per transaction. The default is 1000. An interesting
+  value to use is 1, causing the test to primarily measure the speed of
+  opening connections and committing transactions.
+
+  .. versionchanged:: 0.6
+                      Specify this option more than once to run the
+                      tests with different object counts.
+
+* ``-c`` (``--concurrency``) specifies how many tests to run in
+  parallel. The default is 2. Each of the concurrent tests runs in a
+  separate process to prevent contention over the CPython global
+  interpreter lock. In single-host configurations, the performance
+  measurements should increase with the concurrency level, up to the
+  number of CPU cores in the computer. In more complex configurations,
+  performance will be limited by other factors such as network latency.
+
+  .. versionchanged:: 0.6
+                      Specify this option more than once to run the
+                      tests with different concurrency levels.
+
+* ``-p`` (``--profile``) enables the Python profiler while running the
+  tests and outputs a profile for each test in the specified directory.
+  Note that the profiler typically reduces the database speed by a lot.
+  This option is intended to help developers isolate performance
+  bottlenecks.
+
+* ``--btrees`` causes the data to be stored in the BTrees optimized
+  for ZODB usage (without this option, a PersistentMapping will be
+  used). This is an advanced option that may be useful when tuning
+  particular applications and usage scenarios. This adds additional
+  objects to manage the buckets that make up the BTree. However, if
+  IO BTrees are used (the default when this option is specified)
+  internal storage of keys as integers may reduce pickle times and
+  sizes (and thus improve cache efficiency). This option can take an
+  argument of either IO or OO to specify the type of BTree to use.
+  This option is especially interesting on PyPy or when comparing the
+  pure-Python implementation of BTrees to the C implementation.
+
+  .. versionadded:: 0.6
+
+* ``-r`` (``--repetitions``) determines how many iterations of the
+  test suite will be compared together to find the best time. Higher
+  values can reduce jitter. Higher values are especially useful on
+  platforms that have a warmup period (like PyPy's JIT). The default
+  is 3.
+
+  .. versionadded:: 0.6
+
+* ``--threads`` uses in-process threads for concurrency instead of
+  multiprocessing. This can demonstrate how the GIL affects various
+  database adapters under RelStorage, for instance. It can also have
+  demonstrate the difference that warmup time makes for things like
+  PyPy's JIT.
+
+  .. versionadded:: 0.6
+
+You should write a configuration file that models your intended
+database and network configuration. Running ``zodbshootout`` may reveal
+configuration optimizations that would significantly increase your
+application's performance.

@@ -11,6 +11,9 @@
   specify the ``-n`` option multiple times. (For example, ``-c 1 -c 2 -n 100
   -n 200`` would run four comparisons). The old way of separating numbers with
   commas is no longer supported.
+- Add support for testing with BTrees.
+- Add support for testing using threads instead of multiprocessing.
+- Add support for setting the repetition count.
 
 
 0.5 (2012-09-08)
