@@ -26,6 +26,7 @@ import os
 import sys
 import time
 import transaction
+import random
 import cProfile
 from pstats import Stats
 
@@ -49,6 +50,34 @@ class PObject(Persistent):
 pobject_base_size = (
     len(dumps(PObject)) + len(dumps(PObject(b''))))
 
+with open(__file__, 'rb') as _f:
+    # Just use the this module as the source of our data
+    _random_file_data = _f.read().replace(b'\n', b'').split()
+del _f
+
+random.seed(__file__) # reproducible random functions
+
+def _random_data(size):
+    """
+    Create a random data of at least the given size.
+
+    Use pseudo-random data in case compression is in play so we get a more realistic
+    size and time value than a single 'x'*size would get.
+    """
+
+    def fdata():
+        words = _random_file_data
+        chunksize = min(size, 1024)
+        while True:
+            sample = random.sample(words, len(words) // 10)
+            yield b' '.join(sample[0:chunksize])
+    datagen = fdata()
+
+    data = b''
+    while len(data) < size:
+        data += next(datagen)
+    return data
+
 
 class SpeedTest(object):
 
@@ -70,8 +99,8 @@ class SpeedTest(object):
     def data_to_store(self):
         # Must be fresh when accessed because could already
         # be stored in another database if we're using threads
-        data = b'x' * max(0, self.object_size - pobject_base_size)
-        return dict((n, PObject(data)) for n in range(self.objects_per_txn))
+        data_size = max(0, self.object_size - pobject_base_size)
+        return dict((n, PObject(_random_data(data_size))) for n in range(self.objects_per_txn))
 
     def populate(self, db_factory):
         db = db_factory()

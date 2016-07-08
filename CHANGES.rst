@@ -11,9 +11,19 @@
   specify the ``-n`` option multiple times. (For example, ``-c 1 -c 2 -n 100
   -n 200`` would run four comparisons). The old way of separating numbers with
   commas is no longer supported.
-- Add support for testing with BTrees.
+- Add support for testing with BTrees. This is especially helpful for
+  comparing CPython and PyPy, and is also useful for understanding
+  BTree behaviour.
 - Add support for testing using threads instead of multiprocessing.
-- Add support for setting the repetition count.
+  This is especially helpful on PyPy or when testing concurrency of a
+  RelStorage database driver and/or gevent.
+- Add support for setting the repetition count. This is especially
+  helpful on PyPy.
+- Add the ``--log`` option to enable process logging. This is useful
+  when using zodbshootout to understand changes in a single storage.
+- Use randomized data for the objects instead of a constant string.
+  This lets us more accurately model effects due to compression at the
+  storage or network layers.
 
 
 0.5 (2012-09-08)

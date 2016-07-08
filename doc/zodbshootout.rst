@@ -76,6 +76,13 @@ The ``zodbshootout`` script accepts the following options.
 
   .. versionadded:: 0.6
 
+* ``--log`` enables logging to the console at the specified level. If
+  no level is specified but this option is given, then INFO logging
+  will be enabled. This is useful for details about the workings of a
+  storage and the effects various options have on it.
+
+  .. versionadded:: 0.6
+
 You should write a configuration file that models your intended
 database and network configuration. Running ``zodbshootout`` may reveal
 configuration optimizations that would significantly increase your

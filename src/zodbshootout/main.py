@@ -125,10 +125,21 @@ def main(argv=None):
     parser.add_argument(
         "--threads", action='store_true', default=False,
         help="Use threads instead of multiprocessing")
+    parser.add_argument(
+        "--log", nargs="?", const="INFO", default=False,
+        choices=['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'],
+        help="Enable logging in the root logger at the given level (INFO)")
     parser.add_argument("config_file", type=argparse.FileType())
 
     options = parser.parse_args(argv)
     conf_fn = options.config_file
+
+    if options.log:
+        import logging
+        lvl_map = getattr(logging, '_nameToLevel', None) or getattr(logging, '_levelNames', {})
+        logging.basicConfig(level=lvl_map.get(options.log, logging.INFO),
+        format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
+
 
     object_counts = options.counts or [1000]
     object_size = max(options.object_size, pobject_base_size)

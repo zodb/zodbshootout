@@ -24,6 +24,9 @@ from six.moves.queue import Queue as MTQueue
 from six.moves.queue import Empty
 import time
 
+import logging
+logger = logging.getLogger(__name__)
+
 strategies = {
     'threads': (MTProcess, MTQueue),
     'mp': (MPProcess, MPQueue)
@@ -71,6 +74,7 @@ class Child(object):
         except (SystemExit, KeyboardInterrupt):
             return
         except Exception as e:
+            logger.exception("Failed to run %s", self.func)
             self.parent_queue.put((
                 self.child_num, 'exception', '%s: %s' % (type(e), str(e))))
         else:
