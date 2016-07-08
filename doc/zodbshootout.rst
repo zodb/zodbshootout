@@ -3,17 +3,20 @@
 ==========================
 
 The ``zodbshootout`` script accepts the name of a database
-configuration file. The configuration file contains a list of databases
-to test, in ZConfig format. The script deletes all data from each of
-the databases, then writes and reads the databases while taking
-measurements. Finally, the script produces a tabular summary of objects
-written or read per second in each configuration. ``zodbshootout`` uses
-the names of the databases defined in the configuration file as the
-table column names.
+configuration file. The configuration file contains a list of
+databases to test, in ZConfig format. The script packs each of the
+databases, then writes and reads the databases while taking
+measurements. Finally, the script produces a tabular summary of
+objects written or read per second in each configuration.
+``zodbshootout`` uses the names of the databases defined in the
+configuration file as the table column names.
 
-**Warning**: Again, ``zodbshootout`` **deletes all data** from all
-databases specified in the configuration file. Do not configure it to
-open production databases!
+.. caution::
+   ``zodbshootout`` packs each of the databases specified in
+   the configuration file. This results in the permanent deletion of
+   historical revisions, and if the database is a part of a
+   multi-database (mount points) could result in POSKeyErrors and broken
+   links. Do not configure it to open production databases!
 
 The ``zodbshootout`` script accepts the following options.
 
@@ -80,6 +83,16 @@ The ``zodbshootout`` script accepts the following options.
   no level is specified but this option is given, then INFO logging
   will be enabled. This is useful for details about the workings of a
   storage and the effects various options have on it.
+
+  .. versionadded:: 0.6
+
+* ``--zap`` recreates the tables and indexes for a RelStorage
+  database. *This option completely destroys any existing data.* You
+  will be prompted to confirm that you want to do this for each
+  database that supports it. This is handy for comparing Python 2 and
+  Python 3 (which can't otherwise use the same database schemas).
+
+  .. caution:: This option destroys all data in the relevant database.
 
   .. versionadded:: 0.6
 

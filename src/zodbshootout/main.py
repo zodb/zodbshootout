@@ -30,7 +30,7 @@ from .speedtest import pobject_base_size
 import argparse
 import os
 import sys
-
+from six import PY3
 
 import ZConfig
 
@@ -129,6 +129,9 @@ def main(argv=None):
         "--log", nargs="?", const="INFO", default=False,
         choices=['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'],
         help="Enable logging in the root logger at the given level (INFO)")
+    parser.add_argument(
+        "--zap", action='store_true', default=False,
+        help="Zap the entire RelStorage before running tests. This will destroy all data. ")
     parser.add_argument("config_file", type=argparse.FileType())
 
     options = parser.parse_args(argv)
@@ -138,7 +141,7 @@ def main(argv=None):
         import logging
         lvl_map = getattr(logging, '_nameToLevel', None) or getattr(logging, '_levelNames', {})
         logging.basicConfig(level=lvl_map.get(options.log, logging.INFO),
-        format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
+                            format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
 
 
     object_counts = options.counts or [1000]
@@ -152,6 +155,19 @@ def main(argv=None):
     schema = ZConfig.loadSchemaFile(StringIO(schema_xml))
     config, _handler = ZConfig.loadConfigFile(schema, conf_fn)
     contenders = [(db.name, db) for db in config.databases]
+
+    if options.zap:
+        for db_name, db in contenders:
+            db = db.open()
+            if hasattr(db.storage, 'zap_all'):
+                prompt = "Really destroy all data in %s? [yN] " % db_name
+                if PY3:
+                    resp = input(prompt)
+                else:
+                    resp = raw_input(prompt)
+                if resp in 'yY':
+                    db.storage.zap_all()
+            db.close()
 
     txn_descs = (
         "Add %d Objects",
@@ -169,7 +185,7 @@ def main(argv=None):
             for contender_name, db in contenders:
                 for phase in range(len(txn_descs)):
                     key = (objects_per_txn, concurrency,
-                            contender_name, phase)
+                           contender_name, phase)
                     results[key] = []
 
     try:

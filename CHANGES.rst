@@ -24,7 +24,7 @@
 - Use randomized data for the objects instead of a constant string.
   This lets us more accurately model effects due to compression at the
   storage or network layers.
-
+- Add ``--zap`` to rebuild RelStorage schemas.
 
 0.5 (2012-09-08)
 ================
