@@ -16,12 +16,6 @@ The core speed test loop.
 """
 from __future__ import print_function, absolute_import
 
-from persistent import Persistent
-from persistent.mapping import PersistentMapping
-
-from zodbshootout.fork import distribute
-from zodbshootout.fork import run_in_child
-from ZODB._compat import dumps
 import os
 import sys
 import time
@@ -29,6 +23,13 @@ import transaction
 import random
 import cProfile
 from pstats import Stats
+
+from persistent.mapping import PersistentMapping
+
+from .fork import distribute
+from .fork import run_in_child
+from ._pobject import pobject_base_size
+from ._pobject import PObject
 
 def itervalues(d):
     try:
@@ -38,17 +39,6 @@ def itervalues(d):
     return iv()
 
 
-class PObject(Persistent):
-    """A trivial persistent object"""
-    attr = 1
-
-    def __init__(self, data):
-        self.data = data
-
-
-# Estimate the size of a minimal PObject stored in ZODB.
-pobject_base_size = (
-    len(dumps(PObject)) + len(dumps(PObject(b''))))
 
 with open(__file__, 'rb') as _f:
     # Just use the this module as the source of our data

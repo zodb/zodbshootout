@@ -87,6 +87,20 @@ The ``zodbshootout`` script accepts the following options.
 
   .. versionadded:: 0.6
 
+* ``--gevent`` monkey-patches the system and uses cooperative greenlet
+  concurrency in a single process (like ``--threads``, which it
+  implies; you can specify ``--threads unique`` to change the database
+  sharing).
+
+  This option is only available if gevent is installed.
+
+  .. note:: Not all storage types will work properly with this option.
+            RelStorage will, but make sure you select a
+            gevent-compatible driver like PyMySQL or pg8000 for best
+            results.
+
+  .. versionadded:: 0.6
+
 * ``--log`` enables logging to the console at the specified level. If
   no level is specified but this option is given, then INFO logging
   will be enabled. This is useful for details about the workings of a
