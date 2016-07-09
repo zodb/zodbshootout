@@ -77,6 +77,14 @@ The ``zodbshootout`` script accepts the following options.
   demonstrate the difference that warmup time makes for things like
   PyPy's JIT.
 
+  By default or if you give the ``shared`` argument to this option,
+  all threads will share one ZODB DB object and re-use Connections
+  from the same pool; most threaded applications will use ZODB in this
+  manner. If you specify the ``unique`` argument, then each thread
+  will get its own DB object. In addition to showing how the thread
+  locking strategy of the underlying storage affects things, this can
+  also highlight the impact of shared caches.
+
   .. versionadded:: 0.6
 
 * ``--log`` enables logging to the console at the specified level. If

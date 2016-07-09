@@ -123,8 +123,12 @@ def main(argv=None):
         help="Use BTrees. An argument, if given, is the family name to use, either IO or OO."
         " Specifying --btrees by itself will use an IO BTree; not specifying it will use PersistentMapping.")
     parser.add_argument(
-        "--threads", action='store_true', default=False,
-        help="Use threads instead of multiprocessing")
+        "--threads", const="shared", default=False, nargs="?",
+        choices=["shared", "unique"],
+        help="Use threads instead of multiprocessing."
+        " If you don't give an argument or you give the 'shared' argument,"
+        " then one DB will be used by all threads. If you give the 'unique'"
+        " argument, each thread will get its own DB.")
     parser.add_argument(
         "--log", nargs="?", const="INFO", default=False,
         choices=['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'],
@@ -188,6 +192,9 @@ def main(argv=None):
                            contender_name, phase)
                     results[key] = []
 
+    def make_factory(db_conf):
+        _db = db_conf.open()
+        return _db, lambda: _db
     try:
         for objects_per_txn in object_counts:
             for concurrency in concurrency_levels:
@@ -212,19 +219,32 @@ def main(argv=None):
                     key = (objects_per_txn, concurrency, contender_name)
 
                     for rep in range(repetitions):
+                        if options.threads == 'shared':
+                            _db, db_factory = make_factory(db)
+                            db_close = _db.close
+                            _db.close = lambda: None
+                            _db.pack = lambda: None
+                        else:
+                            db_factory = db.open
+                            db_close = lambda: None
                         for attempt in range(max_attempts):
                             msg = '  Running %d/%d...' % (rep + 1, repetitions)
                             if attempt > 0:
                                 msg += ' (attempt %d)' % (attempt + 1)
                             print(msg, end=' ', file=sys.stderr)
                             try:
-                                times = speedtest.run(
-                                    db.open, contender_name, rep)
+                                try:
+                                    times = speedtest.run(
+                                        db_factory, contender_name, rep)
+                                finally:
+                                    db_close()
                             except ChildProcessError:
                                 if attempt >= max_attempts - 1:
                                     raise
+                                raise
                             else:
                                 break
+
                         msg = (
                             'add %6.4fs, update %6.4fs, '
                             'warm %6.4fs, cold %6.4fs, '
