@@ -26,7 +26,9 @@
   storage or network layers.
 - When gevent is installed, add support for testing with the system
   monkey patched. (Note: This might not be supported by all storages.)
-- Add ``--zap`` to rebuild RelStorage schemas.
+- Add ``--zap`` to rebuild RelStorage schemas on startup. Useful when
+  switching between Python 2 and Python 3.
+- Properly clear ZEO caches on ZODB5. Thanks to Jim Fulton.
 
 0.5 (2012-09-08)
 ================

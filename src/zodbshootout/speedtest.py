@@ -148,6 +148,22 @@ class SpeedTest(object):
         db.close()
         return add_time, update_time
 
+    def _clear_all_caches(self, db):
+        # Clear all caches
+        conn = db.open()
+        conn.cacheMinimize()
+        # Account for changes between ZODB 4 and 5,
+        # where there may or may not be a MVCC adapter layer,
+        # depending on storage type, so we check both.
+        storage = conn._storage
+        if hasattr(storage, '_cache'):
+            storage._cache.clear()
+        conn.close()
+
+        if hasattr(db, 'storage') and hasattr(db.storage, '_cache'):
+            db.storage._cache.clear()
+
+
     def read_test(self, db_factory, n, sync):
         db = db_factory()
         db.setCacheSize(len(self.data_to_store)+400)
@@ -169,13 +185,7 @@ class SpeedTest(object):
         sync()
         warm = self._execute(do_read, 'warm', n)
 
-        # Clear all caches
-        conn = db.open()
-        conn.cacheMinimize()
-        storage = conn._storage
-        if hasattr(storage, '_cache'):
-            storage._cache.clear()
-        conn.close()
+        self._clear_all_caches(db)
 
         sync()
         cold = self._execute(do_read, 'cold', n)
