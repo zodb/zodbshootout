@@ -153,7 +153,8 @@ def run_with_options(options):
             for concurrency in concurrency_levels:
                 speedtest = SpeedTest(
                     concurrency, objects_per_txn, object_size, profile_dir,
-                    'threads' if options.threads else 'mp')
+                    'threads' if options.threads else 'mp',
+                    test_reps=options.test_reps)
                 if options.btrees:
                     import BTrees
                     if options.btrees == 'IO':

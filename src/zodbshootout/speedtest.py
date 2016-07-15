@@ -83,13 +83,16 @@ class SpeedTest(object):
 
     def __init__(self, concurrency, objects_per_txn, object_size,
                  profile_dir=None,
-                 mp_strategy='mp'):
+                 mp_strategy='mp',
+                 test_reps=None):
         self.concurrency = concurrency
         self.objects_per_txn = objects_per_txn
         self.object_size = object_size
         self.profile_dir = profile_dir
         self.contender_name = None
         self.mp_strategy = mp_strategy
+        if test_reps:
+            self.individual_test_reps = test_reps
         self.rep = 0  # repetition number
 
     @property
@@ -271,6 +274,8 @@ class SpeedTest(object):
         write_times = distribute(write, r, strategy=self.mp_strategy)
         read_times = distribute(read, r, strategy=self.mp_strategy)
 
+        # XXX: Several of these are already actually an average of several tests,
+        # which we then average again here. Are we discarding information?
         add_times = [t[0] for t in write_times]
         update_times = [t[1] for t in write_times]
         warm_times = [t[0] for t in read_times]

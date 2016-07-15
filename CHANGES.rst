@@ -30,7 +30,8 @@
   switching between Python 2 and Python 3.
 - Properly clear ZEO caches on ZODB5. Thanks to Jim Fulton.
 - The reported numbers should be more stable, thanks to running
-  individual tests more times and taking the mean instead of the min.
+  individual tests more times (via the ``--test-reps`` option) and
+  taking the mean instead of the min.
 
 0.5 (2012-09-08)
 ================
