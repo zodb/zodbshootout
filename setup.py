@@ -55,6 +55,9 @@ setup(
         'mysql': ['relstorage[mysql]'],
         'postgresql': ['relstorage[postgresql]'],
         'oracle': ['relstorage[oracle]'],
+        ':python_version == "2.7"': [
+            'statistics'
+        ]
     },
     classifiers=[
         "Programming Language :: Python :: 2.7",

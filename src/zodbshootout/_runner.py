@@ -29,6 +29,7 @@ from .speedtest import pobject_base_size
 
 import os
 import sys
+from statistics import mean
 from six import PY3
 
 import ZConfig
@@ -152,7 +153,8 @@ def run_with_options(options):
             for concurrency in concurrency_levels:
                 speedtest = SpeedTest(
                     concurrency, objects_per_txn, object_size, profile_dir,
-                    'threads' if options.threads else 'mp')
+                    'threads' if options.threads else 'mp',
+                    test_reps=options.test_reps)
                 if options.btrees:
                     import BTrees
                     if options.btrees == 'IO':
@@ -188,6 +190,7 @@ def run_with_options(options):
                                 try:
                                     times = speedtest.run(
                                         db_factory, contender_name, rep)
+                                    times = tuple(times)
                                 finally:
                                     db_close()
                             except ChildProcessError:
@@ -214,7 +217,7 @@ def run_with_options(options):
         print(file=sys.stderr)
         print(
             'Results show objects written or read per second. '
-            'Best of', repetitions, file=sys.stderr)
+            'Mean of', repetitions, file=sys.stderr)
 
         for concurrency in concurrency_levels:
             print()
@@ -238,7 +241,7 @@ def run_with_options(options):
                         times = results[key]
                         if times:
                             count = (
-                                concurrency * objects_per_txn / min(times))
+                                concurrency * objects_per_txn / mean(times))
                             row.append('%d' % count)
                         else:
                             row.append('?')

@@ -28,6 +28,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     obj_group = parser.add_argument_group("Objects", "Control the objects put in ZODB")
     con_group = parser.add_argument_group("Concurrency", "Control over concurrency")
+    rep_group = parser.add_argument_group("Repetitions", "Control over test repetitions")
     obj_group.add_argument(
         "-n", "--object-counts", dest="counts",
         type=int,
@@ -39,11 +40,16 @@ def main(argv=None):
         type=int,
         help="Size of each object in bytes (estimated, default approx. %d)" % pobject_base_size,
         )
-    parser.add_argument(
+    rep_group.add_argument(
         '-r', '--repetitions', default=3,
         type=int,
-        help="Number of repetitions of the complete test. The best values out of this many "
+        help="Number of repetitions of the complete test. The average values out of this many "
         "repetitions will be displayed. Default is 3.")
+    rep_group.add_argument(
+        "--test-reps", default=20,
+        type=int,
+        help="Number of repetitions of individual tests (such as add/update/cold/warm). "
+        "The average values of this many repetitions will be used. Default is 20.")
     con_group.add_argument(
         "-c", "--concurrency", dest="concurrency",
         type=int,
