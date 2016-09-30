@@ -26,6 +26,7 @@ def main(argv=None):
         argv = sys.argv[1:]
 
     parser = argparse.ArgumentParser()
+    prof_group = parser.add_argument_group("Profiling", "Control over profiling the database")
     obj_group = parser.add_argument_group("Objects", "Control the objects put in ZODB")
     con_group = parser.add_argument_group("Concurrency", "Control over concurrency")
     rep_group = parser.add_argument_group("Repetitions", "Control over test repetitions")
@@ -56,10 +57,6 @@ def main(argv=None):
         action="append",
         help="Concurrency levels to use. Default is 2. Use this option as many times as you want."
         )
-    parser.add_argument(
-        "-p", "--profile", dest="profile_dir", default="",
-        help="Profile all tests and output results to the specified directory",
-        )
     obj_group.add_argument(
         "--btrees", nargs="?", const="IO", default=False,
         choices=['IO', 'OO'],
@@ -88,6 +85,16 @@ def main(argv=None):
         con_group.add_argument(
             "--gevent", action="store_true", default=False,
             help="Monkey-patch the system with gevent before running. Implies --threads (if not given).")
+
+    prof_group.add_argument(
+        "-p", "--profile", dest="profile_dir", default="",
+        help="Profile all tests and output results to the specified directory",
+        )
+
+    prof_group.add_argument(
+        "-l", "--leaks", dest='leaks', action='store_true', default=False,
+        help="Check for object leaks after every repetition. This only makes sense with --threads"
+    )
 
     parser.add_argument("config_file", type=argparse.FileType())
 

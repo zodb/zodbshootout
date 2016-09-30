@@ -118,6 +118,11 @@ The ``zodbshootout`` script accepts the following options.
 
   .. versionadded:: 0.6
 
+* ``--leaks`` prints a summary of possibly leaking objects after each
+  test repetition. This is useful for storage and ZODB developers.
+
+  .. versionadded:: 0.6
+
 You should write a configuration file that models your intended
 database and network configuration. Running ``zodbshootout`` may reveal
 configuration optimizations that would significantly increase your

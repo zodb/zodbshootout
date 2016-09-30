@@ -19,9 +19,11 @@ from setuptools import setup, find_packages
 import os
 
 install_requires = [
+    'objgraph',
     'setuptools',
-    'ZODB',
-    'ZEO'
+    # ZODB and ZEO are handled as extras with environment markers
+    #'ZODB',
+    #'ZEO'
 ]
 
 def read_file(*path):
@@ -57,7 +59,17 @@ setup(
         'oracle': ['relstorage[oracle]'],
         ':python_version == "2.7"': [
             'statistics'
-        ]
+        ],
+        ":python_full_version > '2.7.8'": [
+            'ZODB',
+            'ZEO',
+        ],
+        ":python_full_version < '2.7.9'": [
+            # We must pin old versions prior to 2.7.9 because ZEO
+            # 5 only runs on versions with good SSL support.
+            'ZODB >= 4.4.2, <5.0',
+            'ZEO >= 4.2.0, <5.0'
+        ],
     },
     classifiers=[
         "Programming Language :: Python :: 2.7",

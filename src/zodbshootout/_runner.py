@@ -56,6 +56,32 @@ schema_xml = u"""
 </schema>
 """
 
+def _make_leak_check(options):
+    if not options.leaks:
+        return lambda: None, lambda: None
+
+    if PY3:
+        SIO = StringIO
+    else:
+        from io import BytesIO as SIO
+
+    import objgraph
+    import gc
+    def prep_leaks():
+        gc.collect()
+        objgraph.show_growth(file=SIO())
+
+    def show_leaks():
+        gc.collect()
+        gc.collect()
+        sio = SIO()
+        objgraph.show_growth(file=sio)
+        if sio.getvalue():
+            print("    Memory Growth")
+            for line in sio.getvalue().split('\n'):
+                print("    ", line)
+
+    return prep_leaks, show_leaks
 
 def align_columns(rows):
     """Format a list of rows as CSV with aligned columns.
@@ -108,6 +134,7 @@ def run_with_options(options):
     repetitions = options.repetitions
     if profile_dir and not os.path.exists(profile_dir):
         os.makedirs(profile_dir)
+    prep_leaks, show_leaks = _make_leak_check(options)
 
     schema = ZConfig.loadSchemaFile(StringIO(schema_xml))
     config, _handler = ZConfig.loadConfigFile(schema, conf_fn)
@@ -175,12 +202,18 @@ def run_with_options(options):
                     for rep in range(repetitions):
                         if options.threads == 'shared':
                             _db, db_factory = make_factory(db)
-                            db_close = _db.close
+                            __db_close = _db.close
+                            def db_close():
+                                #import pprint; pprint.pprint(_db._storage._cache.clients_local_first[0].stats())
+                                __db_close()
+
                             _db.close = lambda: None
                             _db.pack = lambda: None
                         else:
                             db_factory = db.open
                             db_close = lambda: None
+                        # After the DB is opened, so modules, etc, are imported.
+                        prep_leaks()
                         for attempt in range(max_attempts):
                             msg = '  Running %d/%d...' % (rep + 1, repetitions)
                             if attempt > 0:
@@ -208,6 +241,14 @@ def run_with_options(options):
                         print(msg, file=sys.stderr)
                         for i in range(6):
                             results[key + (i,)].append(times[i])
+
+                        # Clear the things we created before checking for leaks
+                        del db_factory
+                        del db_close
+                        # in case it wasn't defined
+                        _db = None
+                        __db_close = None
+                        show_leaks()
 
     # The finally clause causes test results to print even if the tests
     # stop early.

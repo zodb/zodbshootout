@@ -70,6 +70,7 @@ def _random_data(size):
         data += next(datagen)
     return data
 
+_random_data(100) # call once for the sake of leak checks
 
 WriteTimes = namedtuple('WriteTimes', ['add_time', 'update_time'])
 ReadTimes = namedtuple('ReadTimes', ['warm_time', 'cold_time', 'hot_time', 'steamin_time'])
