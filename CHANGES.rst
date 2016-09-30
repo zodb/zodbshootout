@@ -32,6 +32,8 @@
 - The reported numbers should be more stable, thanks to running
   individual tests more times (via the ``--test-reps`` option) and
   taking the mean instead of the min.
+- Add ``--leaks`` to use `objgraph <>`_ to show any leaking objects at
+  the end of each test repetition. Most useful to storage and ZODB developers.
 
 0.5 (2012-09-08)
 ================

@@ -19,6 +19,7 @@ from setuptools import setup, find_packages
 import os
 
 install_requires = [
+    'objgraph',
     'setuptools',
     'ZODB',
     'ZEO'
