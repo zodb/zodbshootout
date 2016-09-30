@@ -58,7 +58,13 @@ setup(
         'oracle': ['relstorage[oracle]'],
         ':python_version == "2.7"': [
             'statistics'
-        ]
+        ],
+        ":python_full_version < '2.7.9'": [
+            # We must pin old versions prior to 2.7.9 because ZEO
+            # 5 only runs on versions with good SSL support.
+            'ZODB >= 4.4.2, <5.0',
+            'ZEO >= 4.2.0, <5.0'
+        ],
     },
     classifiers=[
         "Programming Language :: Python :: 2.7",
