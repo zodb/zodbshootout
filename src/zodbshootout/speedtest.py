@@ -277,12 +277,14 @@ class SpeedTest(object):
 
         # XXX: Several of these are already actually an average of several tests,
         # which we then average again here. Are we discarding information?
-        add_times = [t[0] for t in write_times]
-        update_times = [t[1] for t in write_times]
-        warm_times = [t[0] for t in read_times]
-        cold_times = [t[1] for t in read_times]
-        hot_times = [t[2] for t in read_times]
-        steamin_times = [t[3] for t in read_times]
+        add_times = [t.add_time for t in write_times]
+        update_times = [t.update_time for t in write_times]
+        warm_times = [t.warm_time for t in read_times]
+        cold_times = [t.cold_time for t in read_times]
+        hot_times = [t.hot_time for t in read_times]
+        steamin_times = [t.steamin_time for t in read_times]
 
-        return [statistics.mean(x)
-                for x in (add_times, update_times, warm_times, cold_times, hot_times, steamin_times)]
+        write_times = WriteTimes(*[statistics.mean(x) for x in (add_times, update_times)])
+        read_times = ReadTimes(*[statistics.mean(x) for x in (warm_times, cold_times, hot_times, steamin_times)])
+
+        return write_times, read_times

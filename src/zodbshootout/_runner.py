@@ -46,8 +46,14 @@ def itervalues(d):
         iv = d.values
     return iv()
 
+if PY3:
+    ask = input
+else:
+    ask = raw_input # pylint:disable=undefined-variable
 
-max_attempts = 20
+DEFAULT_MAX_ATTEMPTS = 20
+DEFAULT_OBJ_COUNTS = (1000,)
+DEFAULT_CONCURRENCIES = (2,)
 
 schema_xml = u"""
 <schema>
@@ -83,7 +89,7 @@ def _make_leak_check(options):
 
     return prep_leaks, show_leaks
 
-def align_columns(rows):
+def _align_columns(rows):
     """Format a list of rows as CSV with aligned columns.
     """
     col_widths = []
@@ -112,6 +118,67 @@ def align_columns(rows):
         yield ''.join(line)
 
 
+def _print_results(options, contenders, object_counts, results):
+    object_counts = options.counts or DEFAULT_OBJ_COUNTS
+    concurrency_levels = options.concurrency or DEFAULT_CONCURRENCIES
+    repetitions = options.repetitions
+
+    txn_descs = (
+        ("Add %d Objects", 0, 'add_time'),
+        ("Update %d Objects", 0, 'update_time'),
+        ("Read %d Warm Objects", 1, 'warm_time'),
+        ("Read %d Cold Objects", 1, 'cold_time'),
+        ("Read %d Hot Objects", 1, 'hot_time'),
+        ("Read %d Steamin' Objects", 1, 'steamin_time'),
+    )
+
+    # show the results in CSV format
+    print(file=sys.stderr)
+    print(
+        'Results show objects written or read per second. '
+        'Mean of', repetitions, file=sys.stderr)
+
+    for concurrency in concurrency_levels:
+        print()
+        print('** concurrency=%d **' % concurrency)
+
+        rows = []
+        row = ['"Transaction"']
+        for contender_name, _db in contenders:
+            row.append(contender_name)
+        rows.append(row)
+
+        for phase in txn_descs:
+            for objects_per_txn in object_counts:
+                desc = phase[0] % objects_per_txn
+                row = ['"%s"' % desc]
+                for contender_name, _db in contenders:
+                    key = (objects_per_txn, concurrency, contender_name)
+                    times = results.get(key)
+                    if not times:
+                        row.append("?")
+                        continue
+
+                    time = getattr(times[phase[1]], phase[2])
+                    count = (concurrency * objects_per_txn / time)
+                    row.append('%d' % count)
+
+                rows.append(row)
+
+        for line in _align_columns(rows):
+            print(line)
+
+def _zap(contenders):
+    for db_name, db in contenders:
+        db = db.open()
+        if hasattr(db.storage, 'zap_all'):
+            prompt = "Really destroy all data in %s? [yN] " % db_name
+            resp = ask(prompt)
+            if resp in 'yY':
+                db.storage.zap_all()
+        db.close()
+
+
 def run_with_options(options):
     conf_fn = options.config_file
 
@@ -127,9 +194,9 @@ def run_with_options(options):
                             format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
 
 
-    object_counts = options.counts or [1000]
+    object_counts = options.counts or DEFAULT_OBJ_COUNTS
     object_size = max(options.object_size, pobject_base_size)
-    concurrency_levels = options.concurrency or [2]
+    concurrency_levels = options.concurrency or DEFAULT_CONCURRENCIES
     profile_dir = options.profile_dir
     repetitions = options.repetitions
     if profile_dir and not os.path.exists(profile_dir):
@@ -141,36 +208,11 @@ def run_with_options(options):
     contenders = [(db.name, db) for db in config.databases]
 
     if options.zap:
-        for db_name, db in contenders:
-            db = db.open()
-            if hasattr(db.storage, 'zap_all'):
-                prompt = "Really destroy all data in %s? [yN] " % db_name
-                if PY3:
-                    resp = input(prompt)
-                else:
-                    resp = raw_input(prompt)
-                if resp in 'yY':
-                    db.storage.zap_all()
-            db.close()
+        _zap(contenders)
 
-    txn_descs = (
-        "Add %d Objects",
-        "Update %d Objects",
-        "Read %d Warm Objects",
-        "Read %d Cold Objects",
-        "Read %d Hot Objects",
-        "Read %d Steamin' Objects",
-        )
-
-    # results: {(objects_per_txn, concurrency, contender, phase): [time]}}
+    # results: {(objects_per_txn, concurrency, contender): [write_times, read_times]}}
     results = {}
-    for objects_per_txn in object_counts:
-        for concurrency in concurrency_levels:
-            for contender_name, db in contenders:
-                for phase in range(len(txn_descs)):
-                    key = (objects_per_txn, concurrency,
-                           contender_name, phase)
-                    results[key] = []
+
 
     def make_factory(db_conf):
         _db = db_conf.open()
@@ -195,7 +237,7 @@ def run_with_options(options):
                         'mappingtype=%s and concurrency=%d (threads? %s)'
                         % (contender_name, objects_per_txn, object_size,
                            speedtest.MappingType,
-                            concurrency, options.threads)), file=sys.stderr)
+                           concurrency, options.threads)), file=sys.stderr)
 
                     key = (objects_per_txn, concurrency, contender_name)
 
@@ -214,22 +256,21 @@ def run_with_options(options):
                             db_close = lambda: None
                         # After the DB is opened, so modules, etc, are imported.
                         prep_leaks()
-                        for attempt in range(max_attempts):
+                        for attempt in range(DEFAULT_MAX_ATTEMPTS):
                             msg = '  Running %d/%d...' % (rep + 1, repetitions)
                             if attempt > 0:
                                 msg += ' (attempt %d)' % (attempt + 1)
                             print(msg, end=' ', file=sys.stderr)
                             try:
                                 try:
-                                    times = speedtest.run(
+                                    write_times, read_times = speedtest.run(
                                         db_factory, contender_name, rep)
-                                    times = tuple(times)
                                 finally:
                                     db_close()
                             except ChildProcessError:
-                                if attempt >= max_attempts - 1:
+                                if attempt >= DEFAULT_MAX_ATTEMPTS - 1:
                                     raise
-                                raise
+                                continue
                             else:
                                 break
 
@@ -237,10 +278,11 @@ def run_with_options(options):
                             'add %6.4fs, update %6.4fs, '
                             'warm %6.4fs, cold %6.4fs, '
                             'hot %6.4fs, steamin %6.4fs'
-                            % times)
+                            % (write_times.add_time, write_times.update_time,
+                               read_times.warm_time, read_times.cold_time,
+                               read_times.hot_time, read_times.steamin_time))
                         print(msg, file=sys.stderr)
-                        for i in range(6):
-                            results[key + (i,)].append(times[i])
+                        results[key] = write_times, read_times
 
                         # Clear the things we created before checking for leaks
                         del db_factory
@@ -253,44 +295,4 @@ def run_with_options(options):
     # The finally clause causes test results to print even if the tests
     # stop early.
     finally:
-
-        # show the results in CSV format
-        print(file=sys.stderr)
-        print(
-            'Results show objects written or read per second. '
-            'Mean of', repetitions, file=sys.stderr)
-
-        for concurrency in concurrency_levels:
-            print()
-            print('** concurrency=%d **' % concurrency)
-
-            rows = []
-            row = ['"Transaction"']
-            for contender_name, db in contenders:
-                row.append(contender_name)
-            rows.append(row)
-
-            for phase in range(len(txn_descs)):
-                for objects_per_txn in object_counts:
-                    desc = txn_descs[phase] % objects_per_txn
-                    if objects_per_txn == 1:
-                        desc = desc[:-1]
-                    row = ['"%s"' % desc]
-                    for contender_name, db in contenders:
-                        key = (objects_per_txn, concurrency,
-                            contender_name, phase)
-                        times = results[key]
-                        if times:
-                            count = (
-                                concurrency * objects_per_txn / mean(times))
-                            row.append('%d' % count)
-                        else:
-                            row.append('?')
-                    rows.append(row)
-
-            for line in align_columns(rows):
-                print(line)
-
-
-if __name__ == '__main__':
-    main()
+        _print_results(options, contenders, object_counts, results)

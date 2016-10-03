@@ -33,6 +33,7 @@ def main(argv=None):
     obj_group.add_argument(
         "-n", "--object-counts", dest="counts",
         type=int,
+        default=[],
         action="append",
         help="Object counts to use (default 1000). Use this option as many times as you want.",
         )
@@ -54,6 +55,7 @@ def main(argv=None):
     con_group.add_argument(
         "-c", "--concurrency", dest="concurrency",
         type=int,
+        default=[],
         action="append",
         help="Concurrency levels to use. Default is 2. Use this option as many times as you want."
         )
