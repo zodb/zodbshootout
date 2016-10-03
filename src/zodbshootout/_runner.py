@@ -22,6 +22,9 @@ from __future__ import print_function, absolute_import
 
 
 from io import StringIO
+from collections import defaultdict
+from itertools import chain
+
 from .fork import ChildProcessError
 
 from .speedtest import SpeedTest
@@ -46,8 +49,14 @@ def itervalues(d):
         iv = d.values
     return iv()
 
+if PY3:
+    ask = input
+else:
+    ask = raw_input # pylint:disable=undefined-variable
 
-max_attempts = 20
+DEFAULT_MAX_ATTEMPTS = 20
+DEFAULT_OBJ_COUNTS = (1000,)
+DEFAULT_CONCURRENCIES = (2,)
 
 schema_xml = u"""
 <schema>
@@ -83,7 +92,7 @@ def _make_leak_check(options):
 
     return prep_leaks, show_leaks
 
-def align_columns(rows):
+def _align_columns(rows):
     """Format a list of rows as CSV with aligned columns.
     """
     col_widths = []
@@ -112,6 +121,150 @@ def align_columns(rows):
         yield ''.join(line)
 
 
+def _print_results(options, contenders, results):
+    object_counts = options.counts or DEFAULT_OBJ_COUNTS
+    concurrency_levels = options.concurrency or DEFAULT_CONCURRENCIES
+    repetitions = options.repetitions
+
+    txn_descs = (
+        ("Add %d Objects", 'add_time'),
+        ("Update %d Objects", 'update_time'),
+        ("Read %d Warm Objects", 'warm_time'),
+        ("Read %d Cold Objects", 'cold_time'),
+        ("Read %d Hot Objects", 'hot_time'),
+        ("Read %d Steamin' Objects", 'steamin_time'),
+    )
+
+    # show the results in CSV format
+    print(file=sys.stderr)
+    print(
+        'Results show objects written or read per second. '
+        'Mean of', repetitions, file=sys.stderr)
+
+    for concurrency in concurrency_levels:
+        print()
+        print('** concurrency=%d **' % concurrency)
+
+        rows = []
+        row = ['"Transaction"']
+        for contender_name, _db in contenders:
+            row.append(contender_name)
+        rows.append(row)
+
+        for phase in txn_descs:
+            for objects_per_txn in object_counts:
+                desc = phase[0] % objects_per_txn
+                row = ['"%s"' % desc]
+                for contender_name, _db in contenders:
+
+                    times = results[contender_name][concurrency].get(objects_per_txn)
+                    if not times:
+                        row.append("?")
+                        continue
+
+                    time = mean(getattr(t, phase[1]) for t in chain(*times))
+                    count = (concurrency * objects_per_txn / time)
+                    row.append('%d' % count)
+
+                rows.append(row)
+
+        for line in _align_columns(rows):
+            print(line)
+
+    json_file = options.dump_json
+    if json_file:
+        import json
+        # Sadly, json.JSONEncoder uses a private recursive implementation
+        # of iterencode that does not call encode() for tuples. This means there's
+        # no easy way to replace the Read/WriteTimes namedtuples with a better presentation
+        # on the fly. We have to do it ahead of time, coupling us to the result structure.
+        # (And encode() calls iterencode(); json.dump calls iterencode directly.)
+        for contender_dict in results.values():
+            for conc_dict in contender_dict.values():
+                for k in list(conc_dict):
+                    conc_dict[k] = [[t._asdict() for t in x]
+                                    for x in conc_dict[k]]
+
+        json.dump(results, json_file, indent=2, sort_keys=True)
+
+def _run_one_repetition(options, rep, speedtest, contender_name, db_factory, db_close):
+    """
+    Runs a single repetition of a contender.
+    """
+    repetitions = options.repetitions
+    for attempt in range(DEFAULT_MAX_ATTEMPTS):
+        msg = '  Running %d/%d...' % (rep + 1, repetitions)
+        if attempt > 0:
+            msg += ' (attempt %d)' % (attempt + 1)
+        print(msg, end=' ', file=sys.stderr)
+        try:
+            try:
+                return speedtest.run(
+                    db_factory, contender_name, rep)
+            finally:
+                db_close()
+        except ChildProcessError:
+            if attempt >= DEFAULT_MAX_ATTEMPTS - 1:
+                raise
+            continue
+
+
+def _run_one_contender(options, speedtest, contender_name, db_conf):
+    """
+    Runs the speed test *repetition* number of times.
+
+    Return a list of (write_times, read_times) tuples.
+    """
+
+    def make_factory():
+        _db = db_conf.open()
+        return _db, _db.close, lambda: _db
+
+    results = []
+    prep_leaks, show_leaks = _make_leak_check(options)
+
+    for rep in range(options.repetitions):
+        if options.threads == 'shared':
+            _db, db_close, db_factory = make_factory()
+            _db.close = lambda: None
+            _db.pack = lambda: None
+        else:
+            db_factory = db_conf.open
+            db_close = lambda: None
+        # After the DB is opened, so modules, etc, are imported.
+        prep_leaks()
+        times, write_times, read_times = _run_one_repetition(options, rep, speedtest, contender_name,
+                                                      db_factory, db_close)
+        msg = (
+            'add %6.4fs, update %6.4fs, '
+            'warm %6.4fs, cold %6.4fs, '
+            'hot %6.4fs, steamin %6.4fs'
+            % (write_times.add_time, write_times.update_time,
+               read_times.warm_time, read_times.cold_time,
+               read_times.hot_time, read_times.steamin_time))
+        print(msg, file=sys.stderr)
+        results.append(times)
+
+        # Clear the things we created before checking for leaks
+        del db_factory
+        del db_close
+        # in case it wasn't defined
+        _db = None
+        show_leaks()
+
+    return results
+
+def _zap(contenders):
+    for db_name, db in contenders:
+        db = db.open()
+        if hasattr(db.storage, 'zap_all'):
+            prompt = "Really destroy all data in %s? [yN] " % db_name
+            resp = ask(prompt)
+            if resp in 'yY':
+                db.storage.zap_all()
+        db.close()
+
+
 def run_with_options(options):
     conf_fn = options.config_file
 
@@ -126,60 +279,27 @@ def run_with_options(options):
         logging.basicConfig(level=lvl_map.get(options.log, logging.INFO),
                             format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
 
-
-    object_counts = options.counts or [1000]
     object_size = max(options.object_size, pobject_base_size)
-    concurrency_levels = options.concurrency or [2]
-    profile_dir = options.profile_dir
-    repetitions = options.repetitions
-    if profile_dir and not os.path.exists(profile_dir):
-        os.makedirs(profile_dir)
-    prep_leaks, show_leaks = _make_leak_check(options)
+    if options.profile_dir and not os.path.exists(options.profile_dir):
+        os.makedirs(options.profile_dir)
 
     schema = ZConfig.loadSchemaFile(StringIO(schema_xml))
     config, _handler = ZConfig.loadConfigFile(schema, conf_fn)
     contenders = [(db.name, db) for db in config.databases]
 
     if options.zap:
-        for db_name, db in contenders:
-            db = db.open()
-            if hasattr(db.storage, 'zap_all'):
-                prompt = "Really destroy all data in %s? [yN] " % db_name
-                if PY3:
-                    resp = input(prompt)
-                else:
-                    resp = raw_input(prompt)
-                if resp in 'yY':
-                    db.storage.zap_all()
-            db.close()
+        _zap(contenders)
 
-    txn_descs = (
-        "Add %d Objects",
-        "Update %d Objects",
-        "Read %d Warm Objects",
-        "Read %d Cold Objects",
-        "Read %d Hot Objects",
-        "Read %d Steamin' Objects",
-        )
+    # results: {contender_name: {concurrency_level: {objects_per_txn: [[SpeedTestTimes]...]}}}
+    results = defaultdict(lambda: defaultdict(dict))
 
-    # results: {(objects_per_txn, concurrency, contender, phase): [time]}}
-    results = {}
-    for objects_per_txn in object_counts:
-        for concurrency in concurrency_levels:
-            for contender_name, db in contenders:
-                for phase in range(len(txn_descs)):
-                    key = (objects_per_txn, concurrency,
-                           contender_name, phase)
-                    results[key] = []
-
-    def make_factory(db_conf):
-        _db = db_conf.open()
-        return _db, lambda: _db
     try:
-        for objects_per_txn in object_counts:
-            for concurrency in concurrency_levels:
+        for objects_per_txn in options.counts or DEFAULT_OBJ_COUNTS:
+            for concurrency in options.concurrency or DEFAULT_CONCURRENCIES:
                 speedtest = SpeedTest(
-                    concurrency, objects_per_txn, object_size, profile_dir,
+                    concurrency, objects_per_txn,
+                    object_size,
+                    options.profile_dir,
                     'threads' if options.threads else 'mp',
                     test_reps=options.test_reps)
                 if options.btrees:
@@ -195,102 +315,13 @@ def run_with_options(options):
                         'mappingtype=%s and concurrency=%d (threads? %s)'
                         % (contender_name, objects_per_txn, object_size,
                            speedtest.MappingType,
-                            concurrency, options.threads)), file=sys.stderr)
+                           concurrency, options.threads)), file=sys.stderr)
 
-                    key = (objects_per_txn, concurrency, contender_name)
-
-                    for rep in range(repetitions):
-                        if options.threads == 'shared':
-                            _db, db_factory = make_factory(db)
-                            __db_close = _db.close
-                            def db_close():
-                                #import pprint; pprint.pprint(_db._storage._cache.clients_local_first[0].stats())
-                                __db_close()
-
-                            _db.close = lambda: None
-                            _db.pack = lambda: None
-                        else:
-                            db_factory = db.open
-                            db_close = lambda: None
-                        # After the DB is opened, so modules, etc, are imported.
-                        prep_leaks()
-                        for attempt in range(max_attempts):
-                            msg = '  Running %d/%d...' % (rep + 1, repetitions)
-                            if attempt > 0:
-                                msg += ' (attempt %d)' % (attempt + 1)
-                            print(msg, end=' ', file=sys.stderr)
-                            try:
-                                try:
-                                    times = speedtest.run(
-                                        db_factory, contender_name, rep)
-                                    times = tuple(times)
-                                finally:
-                                    db_close()
-                            except ChildProcessError:
-                                if attempt >= max_attempts - 1:
-                                    raise
-                                raise
-                            else:
-                                break
-
-                        msg = (
-                            'add %6.4fs, update %6.4fs, '
-                            'warm %6.4fs, cold %6.4fs, '
-                            'hot %6.4fs, steamin %6.4fs'
-                            % times)
-                        print(msg, file=sys.stderr)
-                        for i in range(6):
-                            results[key + (i,)].append(times[i])
-
-                        # Clear the things we created before checking for leaks
-                        del db_factory
-                        del db_close
-                        # in case it wasn't defined
-                        _db = None
-                        __db_close = None
-                        show_leaks()
+                    all_times = _run_one_contender(options, speedtest, contender_name, db)
+                    #results[key] = all_times
+                    results[contender_name][concurrency][objects_per_txn] = all_times
 
     # The finally clause causes test results to print even if the tests
     # stop early.
     finally:
-
-        # show the results in CSV format
-        print(file=sys.stderr)
-        print(
-            'Results show objects written or read per second. '
-            'Mean of', repetitions, file=sys.stderr)
-
-        for concurrency in concurrency_levels:
-            print()
-            print('** concurrency=%d **' % concurrency)
-
-            rows = []
-            row = ['"Transaction"']
-            for contender_name, db in contenders:
-                row.append(contender_name)
-            rows.append(row)
-
-            for phase in range(len(txn_descs)):
-                for objects_per_txn in object_counts:
-                    desc = txn_descs[phase] % objects_per_txn
-                    if objects_per_txn == 1:
-                        desc = desc[:-1]
-                    row = ['"%s"' % desc]
-                    for contender_name, db in contenders:
-                        key = (objects_per_txn, concurrency,
-                            contender_name, phase)
-                        times = results[key]
-                        if times:
-                            count = (
-                                concurrency * objects_per_txn / mean(times))
-                            row.append('%d' % count)
-                        else:
-                            row.append('?')
-                    rows.append(row)
-
-            for line in align_columns(rows):
-                print(line)
-
-
-if __name__ == '__main__':
-    main()
+        _print_results(options, contenders, results)

@@ -20,8 +20,8 @@ matrix:
   fast_finish: true
 script:
   - PYTHONPATH=".travis" coverage run .travis/cover.py -c 1 -n 100 .travis/$ENV.conf --btrees -r 2 --test-reps 1
-  - if [[ $TRAVIS_PYTHON_VERSION != 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 2 -n 100 .travis/$ENV.conf --threads --gevent -r 2 --test-reps 2 --leaks; fi
-  - if [[ $TRAVIS_PYTHON_VERSION == 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 2 -n 100 .travis/$ENV.conf --threads -r 2 --test-reps 2; fi
+  - if [[ $TRAVIS_PYTHON_VERSION != 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 2 -n 100 .travis/$ENV.conf --threads --gevent -r 2 --test-reps 2 --leaks --dump-json; fi
+  - if [[ $TRAVIS_PYTHON_VERSION == 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 2 -n 100 .travis/$ENV.conf --threads -r 2 --test-reps 2 --dump-json; fi
 after_success:
   - coverage combine
   - coveralls
