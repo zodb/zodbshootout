@@ -30,54 +30,62 @@ def main(argv=None):
     obj_group = parser.add_argument_group("Objects", "Control the objects put in ZODB")
     con_group = parser.add_argument_group("Concurrency", "Control over concurrency")
     rep_group = parser.add_argument_group("Repetitions", "Control over test repetitions")
+    out_group = parser.add_argument_group("Output", "Control over the output")
+
+    # Objects
     obj_group.add_argument(
         "-n", "--object-counts", dest="counts",
         type=int,
         default=[],
         action="append",
         help="Object counts to use (default 1000). Use this option as many times as you want.",
-        )
+    )
     obj_group.add_argument(
         "-s", "--object-size", dest="object_size", default=pobject_base_size,
         type=int,
         help="Size of each object in bytes (estimated, default approx. %d)" % pobject_base_size,
-        )
+    )
+    obj_group.add_argument(
+        "--btrees", nargs="?", const="IO", default=False,
+        choices=['IO', 'OO'],
+        help="Use BTrees. An argument, if given, is the family name to use, either IO or OO."
+        " Specifying --btrees by itself will use an IO BTree; not specifying it will use PersistentMapping."
+    )
+    obj_group.add_argument(
+        "--zap", action='store_true', default=False,
+        help="Zap the entire RelStorage before running tests. This will destroy all data. "
+    )
+
+    # Repetitions
     rep_group.add_argument(
         '-r', '--repetitions', default=3,
         type=int,
         help="Number of repetitions of the complete test. The average values out of this many "
-        "repetitions will be displayed. Default is 3.")
+        "repetitions will be displayed. Default is 3."
+    )
     rep_group.add_argument(
         "--test-reps", default=20,
         type=int,
         help="Number of repetitions of individual tests (such as add/update/cold/warm). "
-        "The average values of this many repetitions will be used. Default is 20.")
+        "The average values of this many repetitions will be used. Default is 20."
+    )
+
+    # Concurrency
     con_group.add_argument(
         "-c", "--concurrency", dest="concurrency",
         type=int,
         default=[],
         action="append",
         help="Concurrency levels to use. Default is 2. Use this option as many times as you want."
-        )
-    obj_group.add_argument(
-        "--btrees", nargs="?", const="IO", default=False,
-        choices=['IO', 'OO'],
-        help="Use BTrees. An argument, if given, is the family name to use, either IO or OO."
-        " Specifying --btrees by itself will use an IO BTree; not specifying it will use PersistentMapping.")
+    )
     con_group.add_argument(
         "--threads", const="shared", default=False, nargs="?",
         choices=["shared", "unique"],
         help="Use threads instead of multiprocessing."
         " If you don't give an argument or you give the 'shared' argument,"
         " then one DB will be used by all threads. If you give the 'unique'"
-        " argument, each thread will get its own DB.")
-    parser.add_argument(
-        "--log", nargs="?", const="INFO", default=False,
-        choices=['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'],
-        help="Enable logging in the root logger at the given level (INFO)")
-    parser.add_argument(
-        "--zap", action='store_true', default=False,
-        help="Zap the entire RelStorage before running tests. This will destroy all data. ")
+        " argument, each thread will get its own DB."
+    )
 
     try:
         import gevent
@@ -88,10 +96,30 @@ def main(argv=None):
             "--gevent", action="store_true", default=False,
             help="Monkey-patch the system with gevent before running. Implies --threads (if not given).")
 
+    # Output
+
+    out_group.add_argument(
+        "--log", nargs="?", const="INFO", default=False,
+        choices=['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'],
+        help="Enable logging in the root logger at the given level (INFO)"
+    )
+
+    out_group.add_argument(
+        "--dump-json",
+        nargs="?",
+        const="-",
+        type=argparse.FileType('w'),
+        help="Dump the results in JSON to the specified file. Use '-' for stdout (or if no path is given)."
+        " NOTE: The JSON format is undocumented and subject to change at any time. It is intended to capture"
+        " more information than the printed CSV summary can in order to enable better statistical analysis."
+    )
+
+    # Profiling
+
     prof_group.add_argument(
         "-p", "--profile", dest="profile_dir", default="",
         help="Profile all tests and output results to the specified directory",
-        )
+    )
 
     prof_group.add_argument(
         "-l", "--leaks", dest='leaks', action='store_true', default=False,

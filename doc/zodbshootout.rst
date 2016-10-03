@@ -123,6 +123,15 @@ The ``zodbshootout`` script accepts the following options.
 
   .. versionadded:: 0.6
 
+* ``--dump-json`` writes a JSON structure containing the raw data
+  collected to the file given (or if no file is given, to stdout).
+  This can be useful for doing a more sophisticated analysis.
+
+  .. note:: The JSON structure is subject to change at any time.
+
+  .. versionadded:: 0.6
+
+
 You should write a configuration file that models your intended
 database and network configuration. Running ``zodbshootout`` may reveal
 configuration optimizations that would significantly increase your

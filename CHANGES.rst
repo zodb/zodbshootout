@@ -35,6 +35,8 @@
 - Add ``--leaks`` to use `objgraph <http://mg.pov.lt/objgraph/>`_ to
   show any leaking objects at the end of each test repetition. Most
   useful to storage and ZODB developers.
+- Add ``--dump-json`` to write a JSON representation of more detailed
+  data than is present in the default CSV results.
 
 0.5 (2012-09-08)
 ================

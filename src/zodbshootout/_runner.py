@@ -170,6 +170,24 @@ def _print_results(options, contenders, results):
         for line in _align_columns(rows):
             print(line)
 
+    json_file = options.dump_json
+    if json_file:
+        import json
+        # Sadly, json.JSONEncoder uses a private recursive implementation
+        # of iterencode that does not call encode() for tuples. This means there's
+        # no easy way to replace the Read/WriteTimes namedtuples with a better presentation
+        # on the fly. We have to do it ahead of time, coupling us to the result structure.
+        # (And encode() calls iterencode(); json.dump calls iterencode directly.)
+        def _c(d1, d2):
+            d1.update(d2)
+            return d1
+        for contender_dict in results.values():
+            for conc_dict in contender_dict.values():
+                for k in list(conc_dict):
+                    conc_dict[k] = [_c(x[0]._asdict(), x[1]._asdict()) for x in conc_dict[k]]
+
+        json.dump(results, json_file, indent=2, sort_keys=True)
+
 def _run_one_repetition(options, rep, speedtest, contender_name, db_factory, db_close):
     """
     Runs a single repetition of a contender.
