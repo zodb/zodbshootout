@@ -80,7 +80,7 @@ class SpeedTest(object):
     MappingType = PersistentMapping
     debug = False
 
-    individual_test_reps = 20 # XXX configuration knob
+    individual_test_reps = 20
 
     def __init__(self, concurrency, objects_per_txn, object_size,
                  profile_dir=None,

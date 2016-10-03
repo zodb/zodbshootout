@@ -22,6 +22,8 @@ from __future__ import print_function, absolute_import
 
 
 from io import StringIO
+from collections import defaultdict
+
 from .fork import ChildProcessError
 
 from .speedtest import SpeedTest
@@ -118,7 +120,7 @@ def _align_columns(rows):
         yield ''.join(line)
 
 
-def _print_results(options, contenders, object_counts, results):
+def _print_results(options, contenders, results):
     object_counts = options.counts or DEFAULT_OBJ_COUNTS
     concurrency_levels = options.concurrency or DEFAULT_CONCURRENCIES
     repetitions = options.repetitions
@@ -153,8 +155,8 @@ def _print_results(options, contenders, object_counts, results):
                 desc = phase[0] % objects_per_txn
                 row = ['"%s"' % desc]
                 for contender_name, _db in contenders:
-                    key = (objects_per_txn, concurrency, contender_name)
-                    times = results.get(key)
+
+                    times = results[contender_name][concurrency].get(objects_per_txn)
                     if not times:
                         row.append("?")
                         continue
@@ -234,7 +236,6 @@ def _run_one_contender(options, speedtest, contender_name, db_conf):
         del db_close
         # in case it wasn't defined
         _db = None
-        __db_close = None
         show_leaks()
 
     return results
@@ -264,13 +265,9 @@ def run_with_options(options):
         logging.basicConfig(level=lvl_map.get(options.log, logging.INFO),
                             format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
 
-
-    object_counts = options.counts or DEFAULT_OBJ_COUNTS
     object_size = max(options.object_size, pobject_base_size)
-    concurrency_levels = options.concurrency or DEFAULT_CONCURRENCIES
-    profile_dir = options.profile_dir
-    if profile_dir and not os.path.exists(profile_dir):
-        os.makedirs(profile_dir)
+    if options.profile_dir and not os.path.exists(options.profile_dir):
+        os.makedirs(options.profile_dir)
 
     schema = ZConfig.loadSchemaFile(StringIO(schema_xml))
     config, _handler = ZConfig.loadConfigFile(schema, conf_fn)
@@ -280,13 +277,16 @@ def run_with_options(options):
         _zap(contenders)
 
     # results: {(objects_per_txn, concurrency, contender): [(write_times, read_times)]}}
-    results = {}
+    # results: {contender_name: {concurrency_level: {objects_per_txn: [(write_times, read_times)]}}}
+    results = defaultdict(lambda: defaultdict(dict))
 
     try:
         for objects_per_txn in options.counts or DEFAULT_OBJ_COUNTS:
             for concurrency in options.concurrency or DEFAULT_CONCURRENCIES:
                 speedtest = SpeedTest(
-                    concurrency, objects_per_txn, object_size, profile_dir,
+                    concurrency, objects_per_txn,
+                    object_size,
+                    options.profile_dir,
                     'threads' if options.threads else 'mp',
                     test_reps=options.test_reps)
                 if options.btrees:
@@ -304,12 +304,11 @@ def run_with_options(options):
                            speedtest.MappingType,
                            concurrency, options.threads)), file=sys.stderr)
 
-
-                    key = (objects_per_txn, concurrency, contender_name)
                     all_times = _run_one_contender(options, speedtest, contender_name, db)
-                    results[key] = all_times
+                    #results[key] = all_times
+                    results[contender_name][concurrency][objects_per_txn] = all_times
 
     # The finally clause causes test results to print even if the tests
     # stop early.
     finally:
-        _print_results(options, contenders, object_counts, results)
+        _print_results(options, contenders, results)
