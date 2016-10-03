@@ -25,6 +25,7 @@ import random
 import cProfile
 from collections import namedtuple
 from pstats import Stats
+from itertools import chain
 
 from persistent.mapping import PersistentMapping
 
@@ -74,6 +75,7 @@ _random_data(100) # call once for the sake of leak checks
 
 WriteTimes = namedtuple('WriteTimes', ['add_time', 'update_time'])
 ReadTimes = namedtuple('ReadTimes', ['warm_time', 'cold_time', 'hot_time', 'steamin_time'])
+SpeedTestTimes = namedtuple('SpeedTestTimes', WriteTimes._fields + ReadTimes._fields)
 
 class SpeedTest(object):
 
@@ -138,9 +140,9 @@ class SpeedTest(object):
         if hasattr(db, 'storage') and hasattr(db.storage, '_cache'):
             db.storage._cache.clear()
 
-    def _average_of_runs(self, func, times, args=()):
+    def _times_of_runs(self, func, times, args=()):
         run_times = [func(*args) for _ in range(times)]
-        return statistics.median(run_times)
+        return run_times
 
 
     def write_test(self, db_factory, n, sync):
@@ -159,7 +161,7 @@ class SpeedTest(object):
 
         db.open().close()
         sync()
-        add_time = self._execute(self._average_of_runs, 'add', n,
+        add_time = self._execute(self._times_of_runs, 'add', n,
                                  do_add, self.individual_test_reps)
 
         def do_update():
@@ -174,12 +176,12 @@ class SpeedTest(object):
             return end - start
 
         sync()
-        update_time = self._execute(self._average_of_runs, 'update', n,
+        update_time = self._execute(self._times_of_runs, 'update', n,
                                     do_update, self.individual_test_reps)
 
         time.sleep(.1)
         db.close()
-        return WriteTimes(add_time, update_time)
+        return [WriteTimes(a, u) for a, u in zip(add_time, update_time)]
 
     def read_test(self, db_factory, n, sync):
         db = db_factory()
@@ -215,19 +217,21 @@ class SpeedTest(object):
         warm = self._execute(do_read, 'warm', n)
 
         sync()
-        cold = self._execute(self._average_of_runs, 'cold', n,
+        cold = self._execute(self._times_of_runs, 'cold', n,
                              do_read, self.individual_test_reps, (True, True))
 
         sync()
-        hot = self._execute(self._average_of_runs, 'hot', n,
+        hot = self._execute(self._times_of_runs, 'hot', n,
                             do_read, self.individual_test_reps, (False, True))
 
         sync()
-        steamin = self._execute(self._average_of_runs, 'steamin', n,
+        steamin = self._execute(self._times_of_runs, 'steamin', n,
                                 do_read, self.individual_test_reps)
 
         db.close()
-        return ReadTimes(warm, cold, hot, steamin)
+        return [ReadTimes(w, c, h, s) for w, c, h, s
+                in zip([warm] * self.individual_test_reps,
+                       cold, hot, steamin)]
 
     def _execute(self, func, phase_name, n, *args):
         if not self.profile_dir:
@@ -258,8 +262,8 @@ class SpeedTest(object):
     def run(self, db_factory, contender_name, rep):
         """Run a write and read test.
 
-        Returns the mean time per transaction for 4 phases:
-        write, cold read, hot read, and steamin' read.
+        Returns a list of SpeedTestTimes items containing the results
+        for every test, as well as a WriteTime and ReadTime summary
         """
         self.contender_name = contender_name
         self.rep = rep
@@ -275,8 +279,13 @@ class SpeedTest(object):
         write_times = distribute(write, r, strategy=self.mp_strategy)
         read_times = distribute(read, r, strategy=self.mp_strategy)
 
-        # XXX: Several of these are already actually an average of several tests,
-        # which we then average again here. Are we discarding information?
+        write_times = list(chain(*write_times))
+        read_times = list(chain(*read_times))
+
+        # Return the raw data here so as to not throw away any (more) data
+        times = [SpeedTestTimes(*(w + r)) for w, r in zip(write_times, read_times)]
+
+        # These are just for summary purpose
         add_times = [t.add_time for t in write_times]
         update_times = [t.update_time for t in write_times]
         warm_times = [t.warm_time for t in read_times]
@@ -287,4 +296,4 @@ class SpeedTest(object):
         write_times = WriteTimes(*[statistics.mean(x) for x in (add_times, update_times)])
         read_times = ReadTimes(*[statistics.mean(x) for x in (warm_times, cold_times, hot_times, steamin_times)])
 
-        return write_times, read_times
+        return times, write_times, read_times

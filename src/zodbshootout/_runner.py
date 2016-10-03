@@ -23,6 +23,7 @@ from __future__ import print_function, absolute_import
 
 from io import StringIO
 from collections import defaultdict
+from itertools import chain
 
 from .fork import ChildProcessError
 
@@ -126,12 +127,12 @@ def _print_results(options, contenders, results):
     repetitions = options.repetitions
 
     txn_descs = (
-        ("Add %d Objects", 0, 'add_time'),
-        ("Update %d Objects", 0, 'update_time'),
-        ("Read %d Warm Objects", 1, 'warm_time'),
-        ("Read %d Cold Objects", 1, 'cold_time'),
-        ("Read %d Hot Objects", 1, 'hot_time'),
-        ("Read %d Steamin' Objects", 1, 'steamin_time'),
+        ("Add %d Objects", 'add_time'),
+        ("Update %d Objects", 'update_time'),
+        ("Read %d Warm Objects", 'warm_time'),
+        ("Read %d Cold Objects", 'cold_time'),
+        ("Read %d Hot Objects", 'hot_time'),
+        ("Read %d Steamin' Objects", 'steamin_time'),
     )
 
     # show the results in CSV format
@@ -161,7 +162,7 @@ def _print_results(options, contenders, results):
                         row.append("?")
                         continue
 
-                    time = mean(getattr(t[phase[1]], phase[2]) for t in times)
+                    time = mean(getattr(t, phase[1]) for t in chain(*times))
                     count = (concurrency * objects_per_txn / time)
                     row.append('%d' % count)
 
@@ -178,21 +179,17 @@ def _print_results(options, contenders, results):
         # no easy way to replace the Read/WriteTimes namedtuples with a better presentation
         # on the fly. We have to do it ahead of time, coupling us to the result structure.
         # (And encode() calls iterencode(); json.dump calls iterencode directly.)
-        def _c(d1, d2):
-            d1.update(d2)
-            return d1
         for contender_dict in results.values():
             for conc_dict in contender_dict.values():
                 for k in list(conc_dict):
-                    conc_dict[k] = [_c(x[0]._asdict(), x[1]._asdict()) for x in conc_dict[k]]
+                    conc_dict[k] = [[t._asdict() for t in x]
+                                    for x in conc_dict[k]]
 
         json.dump(results, json_file, indent=2, sort_keys=True)
 
 def _run_one_repetition(options, rep, speedtest, contender_name, db_factory, db_close):
     """
     Runs a single repetition of a contender.
-
-    Returns a (write_times, read_times) tuple.
     """
     repetitions = options.repetitions
     for attempt in range(DEFAULT_MAX_ATTEMPTS):
@@ -202,9 +199,8 @@ def _run_one_repetition(options, rep, speedtest, contender_name, db_factory, db_
         print(msg, end=' ', file=sys.stderr)
         try:
             try:
-                write_times, read_times = speedtest.run(
+                return speedtest.run(
                     db_factory, contender_name, rep)
-                return write_times, read_times
             finally:
                 db_close()
         except ChildProcessError:
@@ -237,7 +233,7 @@ def _run_one_contender(options, speedtest, contender_name, db_conf):
             db_close = lambda: None
         # After the DB is opened, so modules, etc, are imported.
         prep_leaks()
-        write_times, read_times = _run_one_repetition(options, rep, speedtest, contender_name,
+        times, write_times, read_times = _run_one_repetition(options, rep, speedtest, contender_name,
                                                       db_factory, db_close)
         msg = (
             'add %6.4fs, update %6.4fs, '
@@ -247,7 +243,7 @@ def _run_one_contender(options, speedtest, contender_name, db_conf):
                read_times.warm_time, read_times.cold_time,
                read_times.hot_time, read_times.steamin_time))
         print(msg, file=sys.stderr)
-        results.append((write_times, read_times))
+        results.append(times)
 
         # Clear the things we created before checking for leaks
         del db_factory
@@ -294,8 +290,7 @@ def run_with_options(options):
     if options.zap:
         _zap(contenders)
 
-    # results: {(objects_per_txn, concurrency, contender): [(write_times, read_times)]}}
-    # results: {contender_name: {concurrency_level: {objects_per_txn: [(write_times, read_times)]}}}
+    # results: {contender_name: {concurrency_level: {objects_per_txn: [[SpeedTestTimes]...]}}}
     results = defaultdict(lambda: defaultdict(dict))
 
     try:
