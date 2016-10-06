@@ -1,0 +1,16 @@
+include *.rst
+include *.txt
+include .coveragerc
+include buildout-oracle.cfg
+include buildout.cfg
+include reset
+include tox.ini
+include .pylintrc
+recursive-include doc *.py
+recursive-include doc *.rst
+recursive-include doc Makefile
+recursive-include download *.keep
+recursive-include samples *.conf
+recursive-include templates *.conf
+recursive-include templates *.in
+recursive-include .travis *.py *.sh *.conf

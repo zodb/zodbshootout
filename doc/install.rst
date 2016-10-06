@@ -45,3 +45,6 @@ Buildout
 ``zodbshootout`` contains a ``zc.buildout`` configuration for
 creating a complete testing environment. It is described in a
 :doc:`separate document <install-buildout>`.
+
+This is an advanced usage and may require adjustment for a particular
+system.
