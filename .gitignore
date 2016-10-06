@@ -7,6 +7,7 @@
 htmlcov
 .coverage
 bin
+etc
 develop-eggs
 dist
 download
@@ -15,10 +16,6 @@ include
 lib
 parts
 var
-etc/my.cnf
-etc/zeo.conf
-src/relstorage
-src/ZODB-perfmetrics
 
 doc/_build
 doc/__pycache__
