@@ -1,0 +1,32 @@
+[mysqld]
+basedir = ${mysqlconf:basedir}
+plugin_dir = ${mysqlconf:basedir}/lib/plugin
+server_id = ${mysqlconf:server_id}
+
+socket          = ${mysqlconf:socket}
+port            = ${mysqlconf:port}
+pid-file        = ${mysqlconf:pidfile}
+datadir         = ${mysqlconf:datadir}
+
+
+binlog_format=${mysqlconf:binlog_format}
+expire_logs_days=${mysqlconf:expire_logs_days}
+
+
+# Disabling symbolic-links is recommended to prevent assorted security risks
+symbolic-links = 0
+
+key_buffer_size              = 16M
+max_allowed_packet = ${mysqlconf:max_allowed_packet}
+max_connections = ${mysqlconf:max_connections}
+open_files_limit = ${mysqlconf:open_files_limit}
+#storage_engine = InnoDB
+innodb_additional_mem_pool_size = ${mysqlconf:innodb_additional_mem_pool_size}
+innodb_buffer_pool_size = ${mysqlconf:innodb_buffer_pool_size}
+innodb_file_per_table = ${mysqlconf:innodb_file_per_table}
+innodb_flush_method = ${mysqlconf:innodb_flush_method}
+key_buffer_size = ${mysqlconf:key_buffer_size}
+read_buffer_size = ${mysqlconf:read_buffer_size}
+
+[mysql]
+socket          = ${mysqlconf:socket}
