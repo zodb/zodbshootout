@@ -13,7 +13,6 @@
 ##############################################################################
 """A ZODB performance test"""
 
-version = "0.6.dev0"
 
 from setuptools import setup, find_packages
 import os
@@ -31,12 +30,14 @@ def read_file(*path):
     with open(os.path.join(base_dir, *tuple(path))) as f:
         return f.read()
 
+version = read_file('version.txt').strip()
+
 setup(
     name='zodbshootout',
     version=version,
     description=__doc__,
     long_description=read_file("README.rst"),
-    url='https://github.com/zodb/zodbshootout',
+    url='http://zodbshootout.readthedocs.io',
     keywords='ZODB ZEO RelStorage',
     author='Shane Hathaway',
     author_email='shane@hathawaymix.org',

@@ -10,6 +10,11 @@ are easier to interpret.
  Documentation
 ===============
 
+.. image:: https://readthedocs.org/projects/zodbshootout/badge/?version=latest
+         :target: http://zodbshootout.readthedocs.io/en/latest/?badge=latest
+         :alt: Documentation Status
+
+
 `Documentation`_ including `installation instructions`_ is hosted on `readthedocs`_.
 
 The complete `changelog`_ is also there.
@@ -23,6 +28,12 @@ The complete `changelog`_ is also there.
 =============
  Development
 =============
+
+.. image:: https://travis-ci.org/zodb/zodbshootout.png?branch=master
+        :target: https://travis-ci.org/zodb/zodbshootout
+
+.. image:: https://coveralls.io/repos/zodb/zodbshootout/badge.svg?branch=master&service=github
+   :target: https://coveralls.io/github/zodb/zodbshootout?branch=master
 
 zodbshootout is hosted at GitHub:
 

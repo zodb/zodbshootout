@@ -19,4 +19,3 @@ var
 
 doc/_build
 doc/__pycache__
-doc/changelog.rst
