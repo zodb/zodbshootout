@@ -25,6 +25,10 @@ install_requires = [
     #'ZEO'
 ]
 
+tests_require = [
+
+]
+
 def read_file(*path):
     base_dir = os.path.dirname(__file__)
     with open(os.path.join(base_dir, *tuple(path))) as f:
@@ -49,6 +53,7 @@ setup(
     platforms='Any',
     zip_safe=False,
     install_requires=install_requires,
+    tests_require=tests_require,
     entry_points={
         'console_scripts': [
             'zodbshootout = zodbshootout.main:main',
@@ -61,9 +66,17 @@ setup(
         ':python_version == "2.7"': [
             'statistics'
         ],
-        ":python_full_version > '2.7.8'": [
-            'ZODB',
-            'ZEO',
+        ":python_full_version >= '2.7.9'": [
+            'ZODB >= 4.4.2',
+            'ZEO >= 4.2.0',
+        ],
+        ":python_full_version == '3.6.0rc1'": [
+            # For some reason ZEO isn't getting installed
+            # on 3.6rc1/pip 9.0.1/tox 2.5.1. Looks like the
+            # version selection <, >= environment markers aren't working.
+            # So we give a full version spec, which seems to work.
+            'ZODB >= 4.4.2',
+            'ZEO >= 4.2.0',
         ],
         ":python_full_version < '2.7.9'": [
             # We must pin old versions prior to 2.7.9 because ZEO
@@ -71,11 +84,13 @@ setup(
             'ZODB >= 4.4.2, <5.0',
             'ZEO >= 4.2.0, <5.0'
         ],
+        "test": tests_require,
     },
     classifiers=[
         "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3.4",
         "Programming Language :: Python :: 3.5",
+        "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: Implementation :: CPython",
         "Programming Language :: Python :: Implementation :: PyPy",
         "Operating System :: MacOS :: MacOS X",
