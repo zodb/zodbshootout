@@ -4,24 +4,28 @@ services:
   - mysql
   - postgresql
 addons:
-# Use postgresql 9.3 to get commit-lock testing
+# Use postgresql 9.3+ to get commit-lock testing
   postgresql: "9.3"
 python:
   - 2.7
   - 3.4
-  - pypy
+  - pypy-5.4.1
 env:
   matrix:
-# RelStorage environments commented out pending compatible release
-#    - ENV=mysql
-#    - ENV=postgres
-    - ENV=file
+    - ENV=travis
+# We can test each one separately, but it
+# uses lest build jobs in total to run them together
+# which is overall a bit faster.
+    #- ENV=mysql
+    #- ENV=postgres
+    #- ENV=file
 matrix:
   fast_finish: true
 script:
+# Running the big test under coverage on pypy takes 3 minutes compared to ~30s for CPython
   - PYTHONPATH=".travis" coverage run .travis/cover.py -c 1 -n 100 .travis/$ENV.conf --btrees -r 2 --test-reps 1
-  - if [[ $TRAVIS_PYTHON_VERSION != 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 2 -n 100 .travis/$ENV.conf --threads --gevent -r 2 --test-reps 2 --leaks --dump-json; fi
-  - if [[ $TRAVIS_PYTHON_VERSION == 'pypy' ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 2 -n 100 .travis/$ENV.conf --threads -r 2 --test-reps 2 --dump-json; fi
+  - if [[ $TRAVIS_PYTHON_VERSION != pypy* ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --threads --gevent -r 2 --test-reps 2 --leaks --dump-json; fi
+  - if [[ $TRAVIS_PYTHON_VERSION == pypy* ]]; then PYTHONPATH=".travis" python .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --threads -r 2 --test-reps 2 --leaks --dump-json; fi
 after_success:
   - coverage combine
   - coveralls
@@ -31,16 +35,11 @@ notifications:
 install:
   - pip install -U pip setuptools
   - pip install -U tox coveralls zope.testing mock coverage
-  - if [[ $TRAVIS_PYTHON_VERSION != 'pypy' ]]; then pip install -U gevent; fi
+  - if [[ $TRAVIS_PYTHON_VERSION != pypy* ]]; then pip install -U gevent; fi
   - pip install -U -e .
   - .travis/setup-$ENV.sh
-# cache: pip seems not to work if `install` is replaced (https://github.com/travis-ci/travis-ci/issues/3239)
-cache:
-  directories:
-    - $HOME/.cache/pip
-    - $HOME/.venv
-    - $HOME/.runtimes
-    - $HOME/.wheelhouse
+
+cache: pip
 
 before_cache:
     - rm -f $HOME/.cache/pip/log/debug.log
