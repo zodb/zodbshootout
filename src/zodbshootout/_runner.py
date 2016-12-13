@@ -270,13 +270,8 @@ def run_with_options(options):
 
     # Do the gevent stuff ASAP
     if getattr(options, 'gevent', False):
-        try:
-            import gevent.monkey
-        except ImportError:
-            print("WARNING: gevent not available")
-            options.gevent = False
-        else:
-            gevent.monkey.patch_all()
+        import gevent.monkey
+        gevent.monkey.patch_all()
 
     if options.log:
         import logging
