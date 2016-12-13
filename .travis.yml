@@ -35,7 +35,7 @@ install:
   - pip install -U pip setuptools
   - pip install -U tox coveralls zope.testing mock coverage gevent
   - pip install -U -e .
-  - .travis/setup-$ENV.sh
+  - (cd .travis && ./setup-$ENV.sh)
 
 cache: pip
 
