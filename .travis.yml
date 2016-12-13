@@ -4,7 +4,7 @@ services:
   - mysql
   - postgresql
 addons:
-# Use postgresql 9.3 to get commit-lock testing
+# Use postgresql 9.3+ to get commit-lock testing
   postgresql: "9.3"
 python:
   - 2.7
@@ -12,9 +12,8 @@ python:
   - pypy
 env:
   matrix:
-# RelStorage environments commented out pending compatible release
-#    - ENV=mysql
-#    - ENV=postgres
+    - ENV=mysql
+    - ENV=postgres
     - ENV=file
 matrix:
   fast_finish: true
@@ -34,13 +33,8 @@ install:
   - if [[ $TRAVIS_PYTHON_VERSION != 'pypy' ]]; then pip install -U gevent; fi
   - pip install -U -e .
   - .travis/setup-$ENV.sh
-# cache: pip seems not to work if `install` is replaced (https://github.com/travis-ci/travis-ci/issues/3239)
-cache:
-  directories:
-    - $HOME/.cache/pip
-    - $HOME/.venv
-    - $HOME/.runtimes
-    - $HOME/.wheelhouse
+
+cache: pip
 
 before_cache:
     - rm -f $HOME/.cache/pip/log/debug.log

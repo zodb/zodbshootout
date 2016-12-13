@@ -55,9 +55,9 @@ setup(
         ]
     },
     extras_require={
-        'mysql': ['relstorage[mysql]'],
-        'postgresql': ['relstorage[postgresql]'],
-        'oracle': ['relstorage[oracle]'],
+        'mysql': ['relstorage[mysql] >= 2.0rc1'],
+        'postgresql': ['relstorage[postgresql] >= 2.0rc1'],
+        'oracle': ['relstorage[oracle] >= 2.0rc1' ],
         ':python_version == "2.7"': [
             'statistics'
         ],
