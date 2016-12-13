@@ -67,7 +67,7 @@ def main(argv=None):
         "--test-reps", default=20,
         type=int,
         help="Number of repetitions of individual tests (such as add/update/cold/warm). "
-        "The average values of this many repetitions will be used. Default is 20."
+        "The average times of this many repetitions will be used. Default is 20."
     )
 
     # Concurrency

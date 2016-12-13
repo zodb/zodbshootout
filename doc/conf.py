@@ -354,6 +354,7 @@ intersphinx_mapping = {
     'https://docs.python.org/': None,
     'http://zodb.readthedocs.io/en/latest/': None,
     'http://relstorage.readthedocs.io/en/latest/': None,
+    'http://persistent.readthedocs.io/en/latest/': None,
 }
 
 extlinks = {'issue': ('https://github.com/zodb/zodbshootout/issues/%s',

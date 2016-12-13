@@ -14,23 +14,25 @@ The table below shows typical output of running ``zodbshootout`` with
     "Read 1000 Steamin' Objects",    4591465, 4366792,  3339414, 4534382
 
 ``zodbshootout`` runs six kinds of tests for each database. For each
-test, ``zodbshootout`` instructs all processes to perform similar
-transactions concurrently, computes the average duration of the
-concurrent transactions, takes the fastest timing of three test runs,
-and derives how many objects per second the database is capable of
-writing or reading under the given conditions.
+test, ``zodbshootout`` instructs all processes (or threads or
+greenlets, as configured) to perform similar transactions
+concurrently, computes the mean duration of the concurrent
+transactions, takes the mean timing of three test runs, and derives
+how many objects per second the database is capable of writing or
+reading under the given conditions.
 
 ``zodbshootout`` runs these tests:
 
 * Add objects
 
-    ``zodbshootout`` begins a transaction, adds the specified number of
-    persistent objects to a ``PersistentMapping``, and commits the
-    transaction. In the sample output above, MySQL was able to add
-    10027 objects per second to the database, almost twice as fast as
-    ZEO, which was limited to 5212 objects per second. Also, with
-    memcached support enabled, MySQL write performance took a small hit
-    due to the time spent storing objects in memcached.
+    ``zodbshootout`` begins a transaction, adds the specified number
+    of persistent objects to a
+    :class:`~persistent.mapping.PersistentMapping`, or ``BTree`` and
+    commits the transaction. In the sample output above, MySQL was
+    able to add 10027 objects per second to the database, almost twice
+    as fast as ZEO, which was limited to 5212 objects per second.
+    Also, with memcached support enabled, MySQL write performance took
+    a small hit due to the time spent storing objects in memcached.
 
 * Update objects
 
