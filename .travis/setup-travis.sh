@@ -1,3 +1,3 @@
-./setup-file.sh
-./setup-postgres.sh
-./setup-mysql.sh
+.travis/setup-file.sh
+.travis/setup-postgres.sh
+.travis/setup-mysql.sh
