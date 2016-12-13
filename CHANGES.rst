@@ -2,8 +2,8 @@
  Changes
 =========
 
-0.6 (Unreleased)
-================
+0.6.0 (2016-12-13)
+==================
 
 This is a major release that focuses on providing more options to fine
 tune the testing process that are expected to be useful to both
