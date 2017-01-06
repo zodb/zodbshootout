@@ -2,7 +2,58 @@
  Running ``zodbshootout``
 ==========================
 
-The ``zodbshootout`` script accepts the name of a database
+Executable
+==========
+
+.. highlight:: shell
+
+``zodbshootout`` can be executed in one of two ways. The first and
+most common is via the ``zodbshootout`` script created by pip or
+buildout::
+
+   # In an active environment with zodbshootout on the path
+   $ zodbshootout ...arguments...
+   # in a non-active virtual environment
+   $ path/to/venv/bin/zodbshootout ...arguments...
+   # buildout
+   $ bin/zodbshootout ...arguments...
+
+``zodbshootout`` can also be directly invoked as a module using the
+python interpreter where it is installed:
+
+   python -m zodbshootout
+
+This documentation will simply refer to the ``zodbshootout`` script,
+but both forms are equivalent.
+
+.. tip::
+
+   For the most repeatable, stable results, it is important to choose
+   a fixed value for the hash seed used for Python's builtin objects
+   (str, bytes, etc). On CPython 2, this means not passing the ``-R``
+   argument to the interpreter, and not having the `PYTHONHASHSEED
+   <https://docs.python.org/2/using/cmdline.html#envvar-PYTHONHASHSEED>`_
+   environment variable set to ``random``. On CPython 3, this means
+   having the `PYTHONHASHSEED
+   <https://docs.python.org/2/using/cmdline.html#envvar-PYTHONHASHSEED>`_
+   environment variable set to a fixed value. On a Unix-like system,
+   this invocation will work for both versions::
+
+         $ PYTHONHASHSEED=0 zodbshootout ...arguments...
+
+Configuration File
+==================
+
+.. caution::
+
+   ``zodbshootout`` packs each of the databases specified in
+   the configuration file. This results in the permanent deletion of
+   historical revisions, and if the database is a part of a
+   multi-database (mount points) could result in
+   :exc:`~ZODB.POSException.POSKeyError` and broken links. Do not
+   configure it to open production databases!
+
+The ``zodbshootout`` script requires the name of a database
 configuration file. The configuration file contains a list of
 databases to test, in ZConfig format. The script packs each of the
 databases, then writes and reads the databases while taking
@@ -11,12 +62,19 @@ objects written or read per second in each configuration.
 ``zodbshootout`` uses the names of the databases defined in the
 configuration file as the table column names.
 
-.. caution:: ``zodbshootout`` packs each of the databases specified in
-   the configuration file. This results in the permanent deletion of
-   historical revisions, and if the database is a part of a
-   multi-database (mount points) could result in
-   :exc:`~ZODB.POSException.POSKeyError` and broken links. Do not
-   configure it to open production databases!
+.. highlight:: xml
+
+An example of a configuration file testing the built-in ZODB file
+storage, a few variations of ZEO, and `RelStorage <http://relstorage.readthedocs.io>`_
+FileStorage would look like this:
+
+.. literalinclude:: ../samples/fs-sample.conf
+   :language: nginx
+
+Options
+=======
+
+.. highlight:: guess
 
 The ``zodbshootout`` script accepts the following options. A
 description of each option follows the text output.

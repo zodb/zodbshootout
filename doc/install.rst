@@ -2,10 +2,11 @@
  Installation
 ==============
 
-There are two supported ways to install and use ``zodbshootout``.
-Use ``pip`` if you already know what configurations you want to test
-and how to set them up. Use :doc:`buildout <install-buildout>` to
-create a complete testing environment.
+There are two supported ways to install and use ``zodbshootout``. Use
+``pip`` (preferably in a virtual environment) if you already know what
+configurations you want to test and how to set them up. Use
+:doc:`buildout <install-buildout>` to create a complete testing
+environment.
 
 pip
 ===
@@ -14,10 +15,10 @@ pip
 
   pip install zodbshootout
 
-This will install the :doc:`zodbshootout <zodbshootout>` command along with ZODB and
-ZEO. To test other storages (such as ``RelStorage``) or storage
-wrappers (such as ``zc.zlibstorage``) you'll need to install those
-packages as well.
+This will install the :doc:`zodbshootout <zodbshootout>` script along
+with ZODB and ZEO. To test other storages (such as ``RelStorage``) or
+storage wrappers (such as ``zc.zlibstorage``) you'll need to install
+those packages as well.
 
 RelStorage
 ----------

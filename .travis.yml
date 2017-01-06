@@ -9,7 +9,7 @@ addons:
 python:
   - 2.7
   - 3.4
-  - 3.6.0rc1
+  - 3.6
   - pypy-5.4.1
 env:
   matrix:
@@ -23,7 +23,9 @@ env:
 matrix:
   fast_finish: true
 script:
-# Running the big test under coverage on pypy takes 3 minutes compared to ~30s for CPython
+# Running the big test under coverage on pypy takes 3 minutes compared
+# to ~30s for CPython
+  - python -m zodbshootout --help
   - PYTHONPATH=".travis" coverage run .travis/cover.py -c 1 -n 100 .travis/$ENV.conf --btrees -r 2 --test-reps 1
   - if [[ $TRAVIS_PYTHON_VERSION != pypy* ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --threads --gevent -r 2 --test-reps 2 --leaks --dump-json; fi
   - if [[ $TRAVIS_PYTHON_VERSION == pypy* ]]; then PYTHONPATH=".travis" python .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --threads -r 2 --test-reps 2 --leaks --dump-json; fi
