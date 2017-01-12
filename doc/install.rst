@@ -30,15 +30,17 @@ appropriate database adapter/driver for a specific database::
   pip install "zodbshootout[postgresql]"
   pip install "zodbshootout[oracle]"
 
-.. note:: This does not actually install the databases. You will
-		  need to install those separately (possibly using your
-		  operating system's package manager) and create user
-		  accounts as described in the RelStorage documentation.
+.. note:: This does not actually install the databases. You will need
+		  to install those separately (possibly using your operating
+		  system's package manager) and create user accounts as
+		  described `in the RelStorage documentation
+		  <http://relstorage.readthedocs.io/en/latest/configure-database.html>`_.
 
 .. tip:: This does not install the packages necessary for RelStorage
 		 to integrate with Memcache. See the RelStorage documentation
-		 for more information on the packages needed to test
-		 RelStorage and Memcache.
+		 `for more information
+		 <http://relstorage.readthedocs.io/en/latest/install.html#memcache-integration>`_
+		 on the packages needed to test RelStorage and Memcache.
 
 Buildout
 ========

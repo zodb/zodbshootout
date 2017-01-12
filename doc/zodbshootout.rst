@@ -65,7 +65,7 @@ configuration file as the table column names.
 .. highlight:: xml
 
 An example of a configuration file testing the built-in ZODB file
-storage, a few variations of ZEO, and `RelStorage <http://relstorage.readthedocs.io>`_
+storage, a few variations of ZEO, and `RelStorage <http://relstorage.readthedocs.io/en/latest/configure-application.html#configuring-repoze-zodbconn>`_
 FileStorage would look like this:
 
 .. literalinclude:: ../samples/fs-sample.conf
