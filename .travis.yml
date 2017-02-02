@@ -15,7 +15,7 @@ env:
   matrix:
     - ENV=travis
 # We can test each one separately, but it
-# uses lest build jobs in total to run them together
+# uses less build jobs in total to run them together
 # which is overall a bit faster.
     #- ENV=mysql
     #- ENV=postgres
@@ -26,6 +26,7 @@ script:
 # Running the big test under coverage on pypy takes 3 minutes compared
 # to ~30s for CPython
   - python -m zodbshootout --help
+  - python setup.py test
   - PYTHONPATH=".travis" coverage run .travis/cover.py -c 1 -n 100 .travis/$ENV.conf --btrees -r 2 --test-reps 1
   - if [[ $TRAVIS_PYTHON_VERSION != pypy* ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --threads --gevent -r 2 --test-reps 2 --leaks --dump-json; fi
   - if [[ $TRAVIS_PYTHON_VERSION == pypy* ]]; then PYTHONPATH=".travis" python .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --threads -r 2 --test-reps 2 --leaks --dump-json; fi

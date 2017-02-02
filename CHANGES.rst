@@ -5,7 +5,8 @@
 0.6.1 (unreleased)
 ==================
 
-- Nothing changed yet.
+- Multi-threaded runs handle exceptions and signals more reliably.
+  Partial fix for :issue:`26`.
 
 
 0.6.0 (2016-12-13)
