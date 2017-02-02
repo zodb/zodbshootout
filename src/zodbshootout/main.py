@@ -136,7 +136,7 @@ def main(argv=None):
     # monkey-patched the parent
     if getattr(options, 'gevent', False):
         import gevent.monkey
-        gevent.monkey.patch_all()
+        gevent.monkey.patch_all(Event=True)
         if not options.threads:
             options.threads = 'shared'
 

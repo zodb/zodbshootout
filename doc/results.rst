@@ -55,6 +55,11 @@ reading under the given conditions.
     ``fs-sample.conf`` for a test configuration that includes a ZEO
     persistent cache.)
 
+    In shared thread mode, the database is not closed and reopened, so
+    with concurrency greater than 1, this test is a measure of a
+    shared pickle cache. When concurrency is 1, this test is
+    equivalent to the steamin' test.
+
 * Read cold objects
 
     In the same process as was used for reading warm objects,

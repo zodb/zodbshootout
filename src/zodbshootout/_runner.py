@@ -234,7 +234,7 @@ def _run_one_contender(options, speedtest, contender_name, db_conf):
         # After the DB is opened, so modules, etc, are imported.
         prep_leaks()
         times, write_times, read_times = _run_one_repetition(options, rep, speedtest, contender_name,
-                                                      db_factory, db_close)
+                                                             db_factory, db_close)
         msg = (
             'add %6.4fs, update %6.4fs, '
             'warm %6.4fs, cold %6.4fs, '
@@ -270,8 +270,12 @@ def run_with_options(options):
 
     # Do the gevent stuff ASAP
     if getattr(options, 'gevent', False):
+        # Because of what we import up top, this must have
+        # already been done, to be sure that it's effective
         import gevent.monkey
-        gevent.monkey.patch_all()
+        if not gevent.monkey.is_module_patched('threading'):
+            raise AssertionError("gevent monkey-patching should have happened")
+
 
     if options.log:
         import logging
@@ -300,7 +304,7 @@ def run_with_options(options):
                     concurrency, objects_per_txn,
                     object_size,
                     options.profile_dir,
-                    'threads' if options.threads else 'mp',
+                    mp_strategy=(options.threads or 'mp'),
                     test_reps=options.test_reps)
                 if options.btrees:
                     import BTrees

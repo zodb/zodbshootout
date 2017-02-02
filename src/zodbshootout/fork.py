@@ -22,6 +22,14 @@ from multiprocessing import Queue as MPQueue
 from threading import Thread as MTProcess
 from six.moves.queue import Queue as MTQueue
 
+try:
+    import gevent.monkey
+except ImportError:
+    pass
+else:
+    if gevent.monkey.is_module_patched('threading'):
+        from gevent.queue import Queue as MTQueue
+
 from six.moves.queue import Empty
 import time
 
@@ -162,13 +170,21 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
             try:
                 child_num, msg, arg = parent_queue.get(timeout=1)
             except Empty:
-                # While we're waiting, see if any children have died.
-                for child in children.values():
-                    if not child.process.is_alive():
-                        raise UnexpectedChildDeathError(
-                            "process running %r failed with exit code %d" % (
-                                child.func, getattr(child.process, 'exitcode', -1)))
-                continue
+                # If we're running with gevent patches, but the driver isn't
+                # cooperative, we may have timed out before the switch. But there may be
+                # something now in the queue. So try to get it, but don't block.
+                time.sleep(0.001) # switch greenlets if need be.
+                try:
+                    child_num, msg, arg = parent_queue.get_nowait()
+                except Empty:
+                    # While we're waiting, see if any children have died.
+                    for child in children.values():
+                        if not child.process.is_alive():
+                            raise UnexpectedChildDeathError(
+                                "process %r running %r failed with exit code %d" % (
+                                    child.process,
+                                    child.func, getattr(child.process, 'exitcode', -1)))
+                    continue
 
             if msg == 'ok':
                 results.append(arg)

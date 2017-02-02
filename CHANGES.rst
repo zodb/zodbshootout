@@ -7,6 +7,13 @@
 
 - Multi-threaded runs handle exceptions and signals more reliably.
   Partial fix for :issue:`26`.
+- Shared thread read tests clear the caches of connections and the
+  database in a more controlled way, more closely modeling the
+  expected behaviour. Previously the cache clearing was
+  non-deterministic. See :issue:`28`.
+- When using gevent, use its Event and Queue implementations for
+  better cooperation with the event loop.
+
 
 
 0.6.0 (2016-12-13)

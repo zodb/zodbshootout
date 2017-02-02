@@ -164,7 +164,10 @@ These options control the concurrency of the testing.
   .. note:: Not all storage types will work properly with this option.
             RelStorage will, but make sure you select a
             gevent-compatible driver like PyMySQL or pg8000 for best
-            results.
+            results. If your driver is not compatible, you may
+            experience timeouts and failures, including
+            ``UnexpectedChildDeathError``. zodbshootout attempts to
+            compensate for this, but may not always be successful.
 
   .. versionadded:: 0.6
 
