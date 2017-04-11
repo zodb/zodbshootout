@@ -27,8 +27,8 @@ script:
 # to ~30s for CPython
   - python -m zodbshootout --help
   - coverage run setup.py test
-  - PYTHONPATH=".travis" coverage run .travis/cover.py -c 1 -n 100 .travis/$ENV.conf --btrees -r 2 --test-reps 1
-  - if [[ $TRAVIS_PYTHON_VERSION != pypy* ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --threads --gevent -r 2 --test-reps 2 --leaks --dump-json; fi
+  - PYTHONPATH=".travis" coverage run .travis/cover.py -c 1 -n 100 .travis/$ENV.conf --btrees -r 2 --test-reps 1 --min-objects 100
+  - if [[ $TRAVIS_PYTHON_VERSION != pypy* ]]; then PYTHONPATH=".travis" coverage run .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --min-objects 200 --threads --gevent -r 2 --test-reps 2 --leaks --dump-json; fi
   - if [[ $TRAVIS_PYTHON_VERSION == pypy* ]]; then PYTHONPATH=".travis" python .travis/cover.py -c 3 -n 100 .travis/$ENV.conf --threads -r 2 --test-reps 2 --leaks --dump-json; fi
 after_success:
   - coverage combine

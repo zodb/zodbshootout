@@ -20,23 +20,25 @@ from collections import namedtuple
 from functools import partial
 from itertools import chain
 from pstats import Stats
-from threading import Event
 
 import cProfile
 
 import os
 import random
 import statistics
-import sys
+
 import time
 import transaction
 
 from persistent.mapping import PersistentMapping
+from persistent.list import PersistentList
 
 from .fork import distribute
 from .fork import run_in_child
 from ._pobject import pobject_base_size
 from ._pobject import PObject
+
+logger = __import__('logging').getLogger(__name__)
 
 def itervalues(d):
     try:
@@ -84,9 +86,10 @@ SpeedTestTimes = namedtuple('SpeedTestTimes', WriteTimes._fields + ReadTimes._fi
 class SpeedTest(object):
 
     MappingType = PersistentMapping
-    debug = False
+
 
     individual_test_reps = 20
+    min_object_count = 0
 
     def __init__(self, concurrency, objects_per_txn, object_size,
                  profile_dir=None,
@@ -137,8 +140,36 @@ class SpeedTest(object):
 
         # clear the database
         root['speedtest'] = None
+        # We explicitly leave the `speedtest_min` value around
+        # so that it can survive packs.
         transaction.commit()
         db.pack()
+
+        # Make sure the minimum objects are present
+        if self.min_object_count:
+            # not all storages support __len__ to return the size of the database.
+            # FileStorage, RelStorage and ClientStorage do.
+            db_count = max(len(db.storage), len(conn._storage))
+            needed = max(self.min_object_count - db_count, 0)
+            if needed:
+                logger.debug("Adding %d objects to a DB of size %d",
+                             needed, db_count)
+                # We append to a list the new objects. This makes sure that we
+                # don't *erase* some objects we were counting on.
+                l = root.get('speedtest_min')
+                if l is None:
+                    l = root['speedtest_min'] = PersistentList()
+
+                # If `needed` is large, this could result in a single
+                # very large transaction. Do we need to think about splitting it up?
+                m = PersistentMapping()
+                m.update(dict((n, PObject('Minimum object size')) for n in range(needed)))
+                l.append(m)
+                transaction.commit()
+                logger.debug("Added %d objects to a DB of size %d",
+                             len(m), db_count)
+            else:
+                logger.debug("Database is already of size %s", db_count)
 
         # put a tree in the database
         root['speedtest'] = t = self.MappingType()
@@ -147,8 +178,7 @@ class SpeedTest(object):
         transaction.commit()
         conn.close()
         db.close()
-        if self.debug:
-            print('Populated storage.', file=sys.stderr)
+        logger.debug('Populated storage.')
 
 
     def _clear_all_caches(self, db):
@@ -172,10 +202,10 @@ class SpeedTest(object):
         return run_times
 
     def _close_conn(self, conn):
-        if self.debug:
-            loads, stores = conn.getTransferCounts(True)
-            db_name = conn.db().database_name
-            print("DB", db_name, "conn", conn, "loads", loads, "stores", stores, file=sys.stderr)
+        loads, stores = conn.getTransferCounts(True)
+        db_name = conn.db().database_name
+        logger.debug("DB %s conn %s loads %s stores %s",
+                     db_name, conn, loads, stores)
         conn.close()
 
     # We should always include conn.open() inside our times,

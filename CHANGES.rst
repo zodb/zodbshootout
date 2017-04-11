@@ -2,7 +2,7 @@
  Changes
 =========
 
-0.6.1 (unreleased)
+0.7.0 (unreleased)
 ==================
 
 - Multi-threaded runs handle exceptions and signals more reliably.
@@ -13,7 +13,12 @@
   non-deterministic. See :issue:`28`.
 - When using gevent, use its Event and Queue implementations for
   better cooperation with the event loop.
-
+- Add ``--min-objects`` option to ensure that the underlying database
+  has at least a set number of objects in place. This lets us test
+  scaling issues and be more repeatable. This is tested with
+  FileStorage, ZEO, and RelStorage (RelStorage 2.1a2 or later is
+  needed for accurate results; earlier versions will add new objects
+  each time, resulting in database growth).
 
 
 0.6.0 (2016-12-13)

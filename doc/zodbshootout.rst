@@ -66,7 +66,7 @@ configuration file as the table column names.
 
 An example of a configuration file testing the built-in ZODB file
 storage, a few variations of ZEO, and `RelStorage <http://relstorage.readthedocs.io/en/latest/configure-application.html#configuring-repoze-zodbconn>`_
-FileStorage would look like this:
+would look like this:
 
 .. literalinclude:: ../samples/fs-sample.conf
    :language: nginx
@@ -120,6 +120,15 @@ These options control the objects put in the database.
   .. caution:: This option destroys all data in the relevant database.
 
   .. versionadded:: 0.6
+
+* ``--min-objects`` ensures that at least the specified number of
+  objects exist in the database independently of the objects being
+  tested. If the database packs away objects or if ``--zap`` is used,
+  this option will add back the necessary number of objects. If there
+  are more objects, nothing will be done. This option is helpful for
+  testing for scalability issues.
+
+  .. versionadded:: 0.7
 
 Concurrency
 -----------
