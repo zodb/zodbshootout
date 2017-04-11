@@ -2,15 +2,6 @@
  Installation
 ==============
 
-There are two supported ways to install and use ``zodbshootout``. Use
-``pip`` (preferably in a virtual environment) if you already know what
-configurations you want to test and how to set them up. Use
-:doc:`buildout <install-buildout>` to create a complete testing
-environment.
-
-pip
-===
-
 ``zodbshootout`` can be installed using ``pip``:
 
   pip install zodbshootout
@@ -21,7 +12,7 @@ storage wrappers (such as ``zc.zlibstorage``) you'll need to install
 those packages as well.
 
 RelStorage
-----------
+==========
 
 ``zodbshootout`` comes with extras that install RelStorage plus an
 appropriate database adapter/driver for a specific database::
@@ -42,12 +33,9 @@ appropriate database adapter/driver for a specific database::
 		 <http://relstorage.readthedocs.io/en/latest/install.html#memcache-integration>`_
 		 on the packages needed to test RelStorage and Memcache.
 
-Buildout
-========
+ZEO
+===
 
-``zodbshootout`` contains a ``zc.buildout`` configuration for
-creating a complete testing environment. It is described in a
-:doc:`separate document <install-buildout>`.
-
-This is an advanced usage and may require adjustment for a particular
-system.
+When ``zodbshootout`` is installed, ZEO is also installed. To test
+ZEO's performance, you'll need to have the ZEO process running, as
+described `in the ZEO documentation <https://pypi.python.org/pypi/ZEO/5.1.0#running-the-server>`_.

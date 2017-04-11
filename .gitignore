@@ -1,20 +1,11 @@
 *.pyc
 *.egg-info
-.installed.cfg
-.mr.developer.cfg
 .pydevproject
 .dir-locals.el
 htmlcov
 .coverage
-bin
 etc
-develop-eggs
 dist
-download
-eggs
-include
-lib
-parts
 var
 
 doc/_build

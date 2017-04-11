@@ -11,7 +11,6 @@ are easier to interpret.
 .. toctree::
 
    install
-   install-buildout
    zodbshootout
    results
    changelog

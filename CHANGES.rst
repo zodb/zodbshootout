@@ -19,7 +19,7 @@
   FileStorage, ZEO, and RelStorage (RelStorage 2.1a2 or later is
   needed for accurate results; earlier versions will add new objects
   each time, resulting in database growth).
-
+- Remove the unmaintained buildout configuration. See :issue:`25`.
 
 0.6.0 (2016-12-13)
 ==================
