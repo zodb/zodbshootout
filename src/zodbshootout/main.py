@@ -55,6 +55,10 @@ def main(argv=None):
         "--zap", action='store_true', default=False,
         help="Zap the entire RelStorage before running tests. This will destroy all data. "
     )
+    obj_group.add_argument(
+        "--min-objects", dest="min_object_count",
+        type=int, default=0, action="store",
+        help="Ensure the database has at least this many objects before running tests.")
 
     # Repetitions
     rep_group.add_argument(
