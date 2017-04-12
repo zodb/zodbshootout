@@ -13,18 +13,19 @@ from ZODB.blob import Blob
 class BlobObject(PObject):
 
     _blob = None
-    _data = None
+
+    _v_seen_data = b''
 
     def _write_data(self, data):
         self._blob = Blob(data)
-        self._data = data
+        self._v_seen_data = data
 
     def zs_read(self):
         with self._blob.open('r') as f:
-            f.read()
+            self._v_seen_data = f.read()
         return self.attr
 
     def zs_update(self):
         with self._blob.open('w') as f:
-            f.write(self._data)
+            f.write(self._v_seen_data)
         self.attr = 1
