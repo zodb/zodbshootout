@@ -15,8 +15,6 @@ buildout::
    $ zodbshootout ...arguments...
    # in a non-active virtual environment
    $ path/to/venv/bin/zodbshootout ...arguments...
-   # buildout
-   $ bin/zodbshootout ...arguments...
 
 ``zodbshootout`` can also be directly invoked as a module using the
 python interpreter where it is installed:
@@ -69,7 +67,21 @@ storage, a few variations of ZEO, and `RelStorage <http://relstorage.readthedocs
 would look like this:
 
 .. literalinclude:: ../samples/fs-sample.conf
-   :language: nginx
+   :language: guess
+
+The corresponding ZEO configuration file would look like this:
+
+.. literalinclude:: ../samples/zeo.conf
+   :language: guess
+
+
+.. note::
+
+   If you'll be using RelStorage, you'll need to have the appropriate
+   RDBMS processes installed, running, and properly configured. Likewise,
+   if you'll be using ZEO, you'll need to have the ZEO server running.
+   For pointers to more information, see :doc:`install`.
+
 
 Options
 =======
