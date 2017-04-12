@@ -60,6 +60,11 @@ def main(argv=None):
         type=int, default=0, action="store",
         help="Ensure the database has at least this many objects before running tests.")
 
+    obj_group.add_argument(
+        "--blobs", dest="use_blobs", action='store_true', default=False,
+        help="Use Blobs instead of pure persistent objects."
+    )
+
     # Repetitions
     rep_group.add_argument(
         '-r', '--repetitions', default=3,

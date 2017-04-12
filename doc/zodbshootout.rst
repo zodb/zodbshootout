@@ -142,6 +142,17 @@ These options control the objects put in the database.
 
   .. versionadded:: 0.7
 
+* ``--blobs`` causes zodbshootout to read and write blobs instead of
+  simple persistent objects. This can be useful for testing options
+  like shared blob dirs on network filesystems, or for diagnosing
+  performance problems. If objects have to be added to meet the
+  ``--min-objects`` count, they will also be blobs. Note that because
+  of the way blobs work, there will be two times the number of objects
+  stored as specified in ``--object-counts``. Expect this option to
+  cause the test to be much slower.
+
+  .. versionadded:: 0.7
+
 Concurrency
 -----------
 

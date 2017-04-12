@@ -16,6 +16,9 @@ The core speed test loop.
 """
 from __future__ import print_function, absolute_import
 
+# This file is imported after gevent monkey patching (if applicable)
+# so it's safe to import anything.
+
 from collections import namedtuple
 from functools import partial
 from itertools import chain
@@ -37,6 +40,7 @@ from .fork import distribute
 from .fork import run_in_child
 from ._pobject import pobject_base_size
 from ._pobject import PObject
+from ._pblobobject import BlobObject
 
 logger = __import__('logging').getLogger(__name__)
 
@@ -86,6 +90,7 @@ SpeedTestTimes = namedtuple('SpeedTestTimes', WriteTimes._fields + ReadTimes._fi
 class SpeedTest(object):
 
     MappingType = PersistentMapping
+    ObjectType = PObject
 
 
     individual_test_reps = 20
@@ -94,7 +99,8 @@ class SpeedTest(object):
     def __init__(self, concurrency, objects_per_txn, object_size,
                  profile_dir=None,
                  mp_strategy='mp',
-                 test_reps=None):
+                 test_reps=None,
+                 use_blobs=False):
         self.concurrency = concurrency
         self.objects_per_txn = objects_per_txn
         self.object_size = object_size
@@ -112,6 +118,12 @@ class SpeedTest(object):
         if mp_strategy == 'shared':
             self._wait_for_master_to_do = self._threaded_wait_for_master_to_do
 
+        if use_blobs:
+            self.ObjectType = BlobObject
+            if object_size == pobject_base_size:
+                # This won't be big enough to actually get any data.
+                self.object_size = object_size * 2
+
     def _wait_for_master_to_do(self, _thread_number, _sync, func, *args):
         # We are the only thing running, this object is not shared,
         # func must always be called.
@@ -126,12 +138,14 @@ class SpeedTest(object):
             func(*args)
         sync()
 
-    @property
-    def data_to_store(self):
+    def data_to_store(self, count=None):
         # Must be fresh when accessed because could already
         # be stored in another database if we're using threads
+        if count is None:
+            count = self.objects_per_txn
         data_size = max(0, self.object_size - pobject_base_size)
-        return dict((n, PObject(_random_data(data_size))) for n in range(self.objects_per_txn))
+        kind = self.ObjectType
+        return dict((n, kind(_random_data(data_size))) for n in range(count))
 
     def populate(self, db_factory):
         db = db_factory()
@@ -163,7 +177,7 @@ class SpeedTest(object):
                 # If `needed` is large, this could result in a single
                 # very large transaction. Do we need to think about splitting it up?
                 m = PersistentMapping()
-                m.update(dict((n, PObject('Minimum object size')) for n in range(needed)))
+                m.update(self.data_to_store(needed))
                 l.append(m)
                 transaction.commit()
                 logger.debug("Added %d objects to a DB of size %d",
@@ -213,7 +227,7 @@ class SpeedTest(object):
     # conn.close() does not talk to the storage, but it does
     # do some cache maintenance and should be excluded if possible.
 
-    def write_test(self, db_factory, n, sync):
+    def write_test(self, db_factory, thread_number, sync):
         db = db_factory()
 
         def do_add():
@@ -221,8 +235,8 @@ class SpeedTest(object):
 
             conn = db.open()
             root = conn.root()
-            m = root['speedtest'][n]
-            m.update(self.data_to_store)
+            m = root['speedtest'][thread_number]
+            m.update(self.data_to_store())
             transaction.commit()
 
             end = time.time()
@@ -232,7 +246,7 @@ class SpeedTest(object):
 
         db.open().close()
         sync()
-        add_time = self._execute(self._times_of_runs, 'add', n,
+        add_time = self._execute(self._times_of_runs, 'add', thread_number,
                                  do_add, self.individual_test_reps)
 
         def do_update():
@@ -240,8 +254,10 @@ class SpeedTest(object):
 
             conn = db.open()
             root = conn.root()
-            for obj in itervalues(root['speedtest'][n]):
-                obj.attr = 1
+            zs_update = self.ObjectType.zs_update
+            for obj in itervalues(root['speedtest'][thread_number]):
+                zs_update(obj)
+
             transaction.commit()
 
             end = time.time()
@@ -250,7 +266,7 @@ class SpeedTest(object):
             return end - start
 
         sync()
-        update_time = self._execute(self._times_of_runs, 'update', n,
+        update_time = self._execute(self._times_of_runs, 'update', thread_number,
                                     do_update, self.individual_test_reps)
 
         time.sleep(.1)
@@ -282,8 +298,9 @@ class SpeedTest(object):
 
             got = 0
 
+            zs_read = self.ObjectType.zs_read
             for obj in itervalues(conn.root()['speedtest'][thread_number]):
-                got += obj.attr
+                got += zs_read(obj)
             obj = None
             if got != self.objects_per_txn:
                 raise AssertionError('data mismatch')
