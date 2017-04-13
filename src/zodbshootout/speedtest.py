@@ -282,9 +282,7 @@ class SpeedTest(object):
         @_TimedDBFunction(db)
         def do_update(conn):
             root = conn.root()
-            zs_update = self.ObjectType.zs_update
-            for obj in itervalues(root['speedtest'][thread_number]):
-                zs_update(obj)
+            self._write_test_update_values(itervalues(root['speedtest'][thread_number]))
 
         sync()
         update_time = self._execute(self._times_of_runs, 'update', thread_number,
@@ -295,6 +293,13 @@ class SpeedTest(object):
         db.close()
         return [WriteTimes(a, u) for a, u in zip(add_time, update_time)]
 
+
+    def _write_test_update_values(self, values):
+        zs_update = self.ObjectType.zs_update
+        for obj in values:
+            zs_update(obj)
+
+
     def read_test(self, db_factory, thread_number, sync):
         db = db_factory()
         # Explicitly set the number of cached objects so we're
@@ -304,12 +309,7 @@ class SpeedTest(object):
         db.setCacheSize(self.objects_per_txn * 2)
 
         def do_read_loop(conn):
-            got = 0
-
-            zs_read = self.ObjectType.zs_read
-            for obj in itervalues(conn.root()['speedtest'][thread_number]):
-                got += zs_read(obj)
-            obj = None
+            got = self._read_test_read_values(itervalues(conn.root()['speedtest'][thread_number]))
             if got != self.objects_per_txn:
                 raise AssertionError('data mismatch')
 
@@ -357,6 +357,14 @@ class SpeedTest(object):
         return [ReadTimes(w, c, h, s) for w, c, h, s
                 in zip([warm] * self.individual_test_reps,
                        cold, hot, steamin)]
+
+    def _read_test_read_values(self, values):
+        got = 0
+
+        zs_read = self.ObjectType.zs_read
+        for obj in values:
+            got += zs_read(obj)
+        return got
 
     def _execute(self, func, phase_name, n, *args):
         if not self.profile_dir:
