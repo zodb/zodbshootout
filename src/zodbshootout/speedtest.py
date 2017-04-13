@@ -21,6 +21,7 @@ from __future__ import print_function, absolute_import
 
 from collections import namedtuple
 from functools import partial
+from functools import wraps
 from itertools import chain
 from pstats import Stats
 
@@ -86,6 +87,53 @@ _random_data(100) # call once for the sake of leak checks
 WriteTimes = namedtuple('WriteTimes', ['add_time', 'update_time'])
 ReadTimes = namedtuple('ReadTimes', ['warm_time', 'cold_time', 'hot_time', 'steamin_time'])
 SpeedTestTimes = namedtuple('SpeedTestTimes', WriteTimes._fields + ReadTimes._fields)
+
+class _TimedDBFunction(object):
+    """
+    Decorator factory for a function that
+    opens a DB, does something while taking the clock time,
+    then closes the DB and returns the time.
+
+    The wrapped function takes the root of the connection as
+    its first argument and then any other arguments.
+
+    The transaction is committed before closing the connection
+    and after running the function.
+    """
+
+    # We should always include conn.open() inside our times,
+    # because it talks to the storage to poll invalidations.
+    # conn.close() does not talk to the storage, but it does
+    # do some cache maintenance and should be excluded if possible.
+
+    def __init__(self, db):
+        self.db = db
+
+    def _close_conn(self, conn):
+        loads, stores = conn.getTransferCounts(True)
+        db_name = conn.db().database_name
+        logger.debug("DB %s conn %s loads %s stores %s",
+                     db_name, conn, loads, stores)
+        conn.close()
+
+    def __call__(self, func):
+        _close_conn = self._close_conn
+        db = self.db
+
+        @wraps(func)
+        def timer(*args, **kwargs):
+            start = time.time()
+
+            conn = db.open()
+
+            func(conn, *args, **kwargs)
+
+            transaction.commit()
+            end = time.time()
+
+            _close_conn(conn)
+            return end - start
+        return timer
 
 class SpeedTest(object):
 
@@ -198,6 +246,7 @@ class SpeedTest(object):
     def _clear_all_caches(self, db):
         # Clear all caches
         # No connection should be open when this is called.
+
         db.pool.map(lambda c: c.cacheMinimize())
         conn = db.open()
         # Account for changes between ZODB 4 and 5,
@@ -215,55 +264,27 @@ class SpeedTest(object):
         run_times = [func(*args) for _ in range(times)]
         return run_times
 
-    def _close_conn(self, conn):
-        loads, stores = conn.getTransferCounts(True)
-        db_name = conn.db().database_name
-        logger.debug("DB %s conn %s loads %s stores %s",
-                     db_name, conn, loads, stores)
-        conn.close()
-
-    # We should always include conn.open() inside our times,
-    # because it talks to the storage to poll invalidations.
-    # conn.close() does not talk to the storage, but it does
-    # do some cache maintenance and should be excluded if possible.
 
     def write_test(self, db_factory, thread_number, sync):
         db = db_factory()
 
-        def do_add():
-            start = time.time()
-
-            conn = db.open()
+        @_TimedDBFunction(db)
+        def do_add(conn):
             root = conn.root()
             m = root['speedtest'][thread_number]
             m.update(self.data_to_store())
-            transaction.commit()
-
-            end = time.time()
-
-            self._close_conn(conn)
-            return end - start
 
         db.open().close()
         sync()
         add_time = self._execute(self._times_of_runs, 'add', thread_number,
                                  do_add, self.individual_test_reps)
 
-        def do_update():
-            start = time.time()
-
-            conn = db.open()
+        @_TimedDBFunction(db)
+        def do_update(conn):
             root = conn.root()
             zs_update = self.ObjectType.zs_update
             for obj in itervalues(root['speedtest'][thread_number]):
                 zs_update(obj)
-
-            transaction.commit()
-
-            end = time.time()
-
-            self._close_conn(conn)
-            return end - start
 
         sync()
         update_time = self._execute(self._times_of_runs, 'update', thread_number,
@@ -282,20 +303,7 @@ class SpeedTest(object):
         # to account for btree nodes.
         db.setCacheSize(self.objects_per_txn * 2)
 
-        def do_read(clear_all=False, clear_conn=False):
-            if clear_all:
-                self._wait_for_master_to_do(thread_number, sync, self._clear_all_caches, db)
-
-            start = time.time()
-            conn = db.open()
-
-            if clear_conn and not clear_all:
-                # clear_all did this already.
-                # sadly we have to include this time in our
-                # timings because opening the connection must
-                # be included. hopefully this is too fast to have an impact.
-                conn.cacheMinimize()
-
+        def do_read_loop(conn):
             got = 0
 
             zs_read = self.ObjectType.zs_read
@@ -305,9 +313,23 @@ class SpeedTest(object):
             if got != self.objects_per_txn:
                 raise AssertionError('data mismatch')
 
-            end = time.time()
-            self._close_conn(conn)
-            return end - start
+        @_TimedDBFunction(db)
+        def do_steamin_read(conn):
+            do_read_loop(conn)
+
+        def do_cold_read():
+            # Clear *all* the caches before opening any connections or
+            # beginning any timing
+            self._wait_for_master_to_do(thread_number, sync, self._clear_all_caches, db)
+            return do_steamin_read() # pylint:disable=no-value-for-parameter
+
+        @_TimedDBFunction(db)
+        def do_hot_read(conn):
+            # sadly we have to include this time in our
+            # timings because opening the connection must
+            # be included. hopefully this is too fast to have an impact.
+            conn.cacheMinimize()
+            do_read_loop(conn)
 
         db.open().close()
         sync()
@@ -315,20 +337,21 @@ class SpeedTest(object):
         # is similar to the steamin test, because we're likely to get the same
         # Connection object again (because the DB wasn't really closed.)
         # Of course, this really only applies when self.concurrency is 1; for other
-        # values, we can't be sure.
-        warm = self._execute(do_read, 'warm', thread_number)
+        # values, we can't be sure. Also note that we only execute this once
+        # (because after that caches are primed).
+        warm = self._execute(do_steamin_read, 'warm', thread_number)
 
         sync()
         cold = self._execute(self._times_of_runs, 'cold', thread_number,
-                             do_read, self.individual_test_reps, (True, True))
+                             do_cold_read, self.individual_test_reps)
 
         sync()
         hot = self._execute(self._times_of_runs, 'hot', thread_number,
-                            do_read, self.individual_test_reps, (False, True))
+                            do_hot_read, self.individual_test_reps)
 
         sync()
         steamin = self._execute(self._times_of_runs, 'steamin', thread_number,
-                                do_read, self.individual_test_reps)
+                                do_steamin_read, self.individual_test_reps)
 
         db.close()
         return [ReadTimes(w, c, h, s) for w, c, h, s
