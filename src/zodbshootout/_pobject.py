@@ -22,11 +22,8 @@ class AbstractPObject(object):
     def __init__(self, data):
         self._write_data(data)
 
-    def zs_read(self):
-        return self.attr
-
-    def zs_update(self):
-        self.attr = 1
+    def _write_data(self, data):
+        raise NotImplementedError()
 
 class PObject(Persistent,
               AbstractPObject):

@@ -135,7 +135,7 @@ class _TimedDBFunction(object):
             return end - start
         return timer
 
-class SpeedTest(object):
+class AbstractSpeedTest(object):
 
     MappingType = PersistentMapping
     ObjectType = PObject
@@ -144,11 +144,17 @@ class SpeedTest(object):
     individual_test_reps = 20
     min_object_count = 0
 
+    def __new__(cls, *_args, **kwargs):
+        if kwargs.pop('use_blobs', False):
+            cls = BlobSpeedTest
+        inst = super(AbstractSpeedTest, cls).__new__(cls)
+        return inst
+
     def __init__(self, concurrency, objects_per_txn, object_size,
                  profile_dir=None,
                  mp_strategy='mp',
                  test_reps=None,
-                 use_blobs=False):
+                 **_kwargs):
         self.concurrency = concurrency
         self.objects_per_txn = objects_per_txn
         self.object_size = object_size
@@ -166,11 +172,6 @@ class SpeedTest(object):
         if mp_strategy == 'shared':
             self._wait_for_master_to_do = self._threaded_wait_for_master_to_do
 
-        if use_blobs:
-            self.ObjectType = BlobObject
-            if object_size == pobject_base_size:
-                # This won't be big enough to actually get any data.
-                self.object_size = object_size * 2
 
     def _wait_for_master_to_do(self, _thread_number, _sync, func, *args):
         # We are the only thing running, this object is not shared,
@@ -293,12 +294,8 @@ class SpeedTest(object):
         db.close()
         return [WriteTimes(a, u) for a, u in zip(add_time, update_time)]
 
-
     def _write_test_update_values(self, values):
-        zs_update = self.ObjectType.zs_update
-        for obj in values:
-            zs_update(obj)
-
+        raise NotImplementedError()
 
     def read_test(self, db_factory, thread_number, sync):
         db = db_factory()
@@ -359,12 +356,7 @@ class SpeedTest(object):
                        cold, hot, steamin)]
 
     def _read_test_read_values(self, values):
-        got = 0
-
-        zs_read = self.ObjectType.zs_read
-        for obj in values:
-            got += zs_read(obj)
-        return got
+        raise NotImplementedError()
 
     def _execute(self, func, phase_name, n, *args):
         if not self.profile_dir:
@@ -428,3 +420,42 @@ class SpeedTest(object):
         read_times = ReadTimes(*[statistics.mean(x) for x in (warm_times, cold_times, hot_times, steamin_times)])
 
         return times, write_times, read_times
+
+class SpeedTest(AbstractSpeedTest):
+
+    def _write_test_update_values(self, values):
+        for obj in values:
+            obj.attr = 1
+
+    def _read_test_read_values(self, values):
+        got = 0
+
+        for obj in values:
+            got += obj.attr
+        return got
+
+class BlobSpeedTest(SpeedTest):
+
+    ObjectType = BlobObject
+
+    def __init__(self, *args, **kwargs):
+        super(BlobSpeedTest, self).__init__(*args, **kwargs)
+
+        if self.object_size == pobject_base_size:
+            # This won't be big enough to actually get any data.
+            self.object_size = self.object_size * 2
+
+    def _write_test_update_values(self, values):
+        for obj in values:
+            with obj.blob.open('w') as f:
+                f.write(obj._v_seen_data)
+            obj.attr = 1
+
+    def _read_test_read_values(self, values):
+        got = 0
+
+        for obj in values:
+            with obj.blob.open('r') as f:
+                obj._v_seen_data = f.read
+            got += obj.attr
+        return got
