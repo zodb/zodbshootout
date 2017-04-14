@@ -20,6 +20,7 @@
   needed for accurate results; earlier versions will add new objects
   each time, resulting in database growth).
 - Remove the unmaintained buildout configuration. See :issue:`25`.
+- Add an option to test the performance of blob storage. See :issue:`29`.
 
 0.6.0 (2016-12-13)
 ==================

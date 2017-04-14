@@ -305,7 +305,8 @@ def run_with_options(options):
                     object_size,
                     options.profile_dir,
                     mp_strategy=(options.threads or 'mp'),
-                    test_reps=options.test_reps)
+                    test_reps=options.test_reps,
+                    use_blobs=options.use_blobs)
                 speedtest.min_object_count = options.min_object_count
                 if options.btrees:
                     import BTrees
@@ -314,12 +315,13 @@ def run_with_options(options):
                     else:
                         speedtest.MappingType = BTrees.family64.OO.BTree
 
+
                 for contender_name, db in contenders:
                     print((
                         'Testing %s with objects_per_txn=%d, object_size=%d, '
-                        'mappingtype=%s, min_objects=%d and concurrency=%d (threads? %s)'
+                        'mappingtype=%s, objecttype=%s, min_objects=%d and concurrency=%d (threads? %s)'
                         % (contender_name, objects_per_txn, object_size,
-                           speedtest.MappingType, options.min_object_count,
+                           speedtest.MappingType, speedtest.ObjectType, options.min_object_count,
                            concurrency, options.threads)), file=sys.stderr)
 
                     all_times = _run_one_contender(options, speedtest, contender_name, db)
