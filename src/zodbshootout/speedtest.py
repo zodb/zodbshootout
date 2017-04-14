@@ -172,6 +172,7 @@ class AbstractSpeedTest(object):
         if mp_strategy == 'shared':
             self._wait_for_master_to_do = self._threaded_wait_for_master_to_do
 
+        self.__random_data = []
 
     def _wait_for_master_to_do(self, _thread_number, _sync, func, *args):
         # We are the only thing running, this object is not shared,
@@ -187,16 +188,28 @@ class AbstractSpeedTest(object):
             func(*args)
         sync()
 
+    def _guarantee_min_random_data(self, count):
+        if len(self.__random_data) < count:
+            needed = count - len(self.__random_data)
+            data_size = max(0, self.object_size - pobject_base_size)
+            self.__random_data.extend([_random_data(data_size) for _ in range(needed)])
+
     def data_to_store(self, count=None):
         # Must be fresh when accessed because could already
-        # be stored in another database if we're using threads
+        # be stored in another database if we're using threads.
+        # However, the random data can be relatively expensive to create,
+        # and we don't want that showing up in profiles, so it can and should
+        # be cached.
         if count is None:
             count = self.objects_per_txn
-        data_size = max(0, self.object_size - pobject_base_size)
+        self._guarantee_min_random_data(count)
         kind = self.ObjectType
-        return dict((n, kind(_random_data(data_size))) for n in range(count))
+        data = self.__random_data
+        return dict((n, kind(data[n])) for n in range(count))
 
     def populate(self, db_factory):
+        self._guarantee_min_random_data(self.objects_per_txn)
+
         db = db_factory()
         conn = db.open()
         root = conn.root()
