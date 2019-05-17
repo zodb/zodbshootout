@@ -44,6 +44,7 @@ disable=wrong-import-position,
     too-many-arguments,
     redefined-builtin,
 	useless-suppression,
+    useless-object-inheritance
 #	undefined-all-variable
 
 

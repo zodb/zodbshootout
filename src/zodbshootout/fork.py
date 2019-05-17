@@ -15,7 +15,7 @@
 Multiprocessing utilities.
 """
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function
 from multiprocessing import Process as MPProcess
 from multiprocessing import Queue as MPQueue
 
@@ -137,9 +137,13 @@ class Child(object):
         delay = resume_time - time.time() - 0.1
         if delay > 0:
             time.sleep(delay)
-        # busy wait until the exact resume time
+        # get as close as we can to the exact resume time
         while time.time() < resume_time:
-            pass
+            # On CPython, this uses a system call (select() on unix),
+            # and does so while allowing threads and interrupts. In
+            # gevent, it lets the loop cycle.
+            time.sleep(0.0001)
+
 
 class SynclessChild(Child):
 

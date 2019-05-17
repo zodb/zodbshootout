@@ -18,12 +18,13 @@ from __future__ import print_function, absolute_import
 
 # This file is imported after gevent monkey patching (if applicable)
 # so it's safe to import anything.
-
+import gc
 from collections import namedtuple
 from functools import partial
 from functools import wraps
 from itertools import chain
 from pstats import Stats
+from threading import Lock
 
 import cProfile
 
@@ -31,7 +32,11 @@ import os
 import random
 import statistics
 
-import time
+try:
+    from time import perf_counter
+except ImportError:
+    from backports.time_perf_counter import perf_counter
+
 import transaction
 
 from persistent.mapping import PersistentMapping
@@ -92,7 +97,7 @@ class _TimedDBFunction(object):
     """
     Decorator factory for a function that
     opens a DB, does something while taking the clock time,
-    then closes the DB and returns the time.
+    then closes the DB and returns the (total_time, time_to_exclude).
 
     The wrapped function takes the root of the connection as
     its first argument and then any other arguments.
@@ -106,15 +111,18 @@ class _TimedDBFunction(object):
     # conn.close() does not talk to the storage, but it does
     # do some cache maintenance and should be excluded if possible.
 
-    def __init__(self, db):
+    def __init__(self, db, excluded_time_lock):
         self.db = db
+        self._excluded_time_lock = excluded_time_lock
 
-    def _close_conn(self, conn):
-        loads, stores = conn.getTransferCounts(True)
-        db_name = conn.db().database_name
-        logger.debug("DB %s conn %s loads %s stores %s",
-                     db_name, conn, loads, stores)
-        conn.close()
+    def _close_conn(self, conn, func_name):
+        with self._excluded_time_lock:
+            loads, stores = conn.getTransferCounts(True)
+            db_name = conn.db().database_name
+            logger.debug("DB %s conn %s func %s loads %s stores %s",
+                         db_name, conn, func_name, loads, stores)
+            conn.close()
+
 
     def __call__(self, func):
         _close_conn = self._close_conn
@@ -122,18 +130,78 @@ class _TimedDBFunction(object):
 
         @wraps(func)
         def timer(*args, **kwargs):
-            start = time.time()
+            start = perf_counter()
 
             conn = db.open()
 
             func(conn, *args, **kwargs)
 
             transaction.commit()
-            end = time.time()
-
-            _close_conn(conn)
-            return end - start
+            after_commit = perf_counter()
+            self._close_conn(conn, func.__name__)
+            end = perf_counter()
+            return (end - start, end - after_commit)
         return timer
+
+class AbstractProfiler(object):
+    enabled = False
+    def __init__(self, prof_fn, stat_fn):
+        self.i_enabled = False
+        self.profiler = None
+        self.prof_fn = prof_fn
+        self.stat_fn = stat_fn
+
+    def __enter__(self):
+        if type(self).enabled:
+            return
+        self.i_enabled = True
+        type(self).enabled = True
+        self._do_enter()
+
+    def __exit__(self, t, v, tb):
+        if not self.i_enabled:
+            return
+        self._do_exit()
+        type(self).enabled = False
+
+    def _do_enter(self):
+        raise NotImplementedError
+
+    def _do_exit(self):
+        raise NotImplementedError
+
+class useCProfile(AbstractProfiler):
+
+    def _do_enter(self):
+
+        self.profiler = cProfile.Profile()
+        self.profiler.enable()
+
+    def _do_exit(self):
+        self.profiler.disable()
+
+        self.profiler.dump_stats(self.prof_fn)
+
+        with open(self.stat_fn, 'w') as f:
+            st = Stats(self.profiler, stream=f)
+            st.strip_dirs()
+            st.sort_stats('cumulative')
+            st.print_stats()
+
+
+class useVMProf(AbstractProfiler):
+    stat_file = None
+
+    def _do_enter(self):
+        import vmprof
+        self.stat_file = open(self.prof_fn, 'w+b')
+        vmprof.enable(self.stat_file.fileno(), lines=True)
+
+    def _do_exit(self):
+        import vmprof
+        vmprof.disable()
+        self.stat_file.flush()
+        self.stat_file.close()
 
 class AbstractSpeedTest(object):
 
@@ -155,6 +223,14 @@ class AbstractSpeedTest(object):
                  mp_strategy='mp',
                  test_reps=None,
                  **_kwargs):
+        """
+
+        :keyword str mp_strategy: A string naming the
+           concurrency strategy. If it is either 'shared' or 'unique',
+           we will be running all tests in a single process using threads or greenlets.
+           Otherwise it must be 'mp', meaning that we will be running each test
+           in its own process.
+        """
         self.concurrency = concurrency
         self.objects_per_txn = objects_per_txn
         self.object_size = object_size
@@ -163,6 +239,7 @@ class AbstractSpeedTest(object):
         if mp_strategy in ('shared', 'unique'):
             self.mp_strategy = 'threads'
         else:
+            assert mp_strategy == 'mp'
             self.mp_strategy = mp_strategy
 
         if test_reps:
@@ -173,20 +250,47 @@ class AbstractSpeedTest(object):
             self._wait_for_master_to_do = self._threaded_wait_for_master_to_do
 
         self.__random_data = []
+        self.__excluded_time_lock = Lock()
+
+    # When everybody is waiting for the master to do something,
+    # that's a good time for the master to also do GC. Nobody should be timing anything
+    # at that point.
 
     def _wait_for_master_to_do(self, _thread_number, _sync, func, *args):
         # We are the only thing running, this object is not shared,
         # func must always be called.
+
+        # Return how long this took.
+        begin = perf_counter()
         func(*args)
+        end = perf_counter()
+        return end - begin
 
     def _threaded_wait_for_master_to_do(self, thread_number, sync, func, *args):
         """
         Block all threads until *func* is called by the first thread (0).
+
+        Return how long this took in the current thread.
+
+        TODO: This might be a good way to handle profiling enable/disable
+        so we can be sure to capture all the activity in a single phase.
         """
+        begin = perf_counter()
         sync()
         if thread_number == 0:
             func(*args)
         sync()
+        end = perf_counter()
+        return end - begin
+
+    def _sync_and_collect(self, thread_number, sync):
+        # Even if our DB's are unique, we only want to do this in the
+        # master OR if we're in mp mode
+        if self.mp_strategy == 'mp':
+            sync()
+            gc.collect()
+        else:
+            self._threaded_wait_for_master_to_do(thread_number, sync, gc.collect)
 
     def _guarantee_min_random_data(self, count):
         if len(self.__random_data) < count:
@@ -256,33 +360,76 @@ class AbstractSpeedTest(object):
         db.close()
         logger.debug('Populated storage.')
 
-
-    def _clear_all_caches(self, db):
-        # Clear all caches
+    def _clear_all_caches(self, db, thread_number, sync):
+        # Clear all caches, returns how long that took.
         # No connection should be open when this is called.
 
-        db.pool.map(lambda c: c.cacheMinimize())
-        conn = db.open()
-        # Account for changes between ZODB 4 and 5,
-        # where there may or may not be a MVCC adapter layer,
-        # depending on storage type, so we check both.
-        storage = conn._storage
-        if hasattr(storage, '_cache'):
-            storage._cache.clear()
-        conn.close()
+        # For gevent, we need to be as careful as possible that this
+        # function doesn't switch (or at least can't be entered
+        # concurrently). If it does, we can wind up with greenlets
+        # double charged for the expense of clearing a cache
+        # (especially in RelStorage, clearing large caches can be
+        # expensive due to the memory allocations). In 'unique' mode,
+        # if we opened a connection here, we would switch, to the
+        # other concurrent greenlets running in this function that
+        # then open their own connection; control returns to the first
+        # function, who takes the expensive action of clearing his
+        # storage cache and then moves on with the test. Each
+        # successive greenlet waits longer and longer before starting
+        # the test.
+        with self.__excluded_time_lock:
+            db.pool.map(lambda c: c.cacheMinimize())
+            # In ZODB 5, db.storage is the storage object passed to the DB object.
+            # If it doesn't implement IMVCCStorage, then an adapter is wrapped
+            # around it to make it do so (if it does, no such adapter is needed).
+            # This is placed in _mvcc_storage. RelStorage is IMVCCStorage; ZEO is not.
+            # Both of them have a `_cache` that needs cleared. We do not need to open a
+            # connection for this to happen. The cache is shared among all connections
+            # in both cases.
 
-        if hasattr(db, 'storage') and hasattr(db.storage, '_cache'):
-            db.storage._cache.clear()
+            if hasattr(db.storage, '_cache'):
+                db.storage._cache.clear()
+
+        # We probably just made a bunch of garbage. Try to get rid of it
+        # before we go in earnest to eliminate the knock-on effect
+        self._sync_and_collect(thread_number, sync)
 
     def _times_of_runs(self, func, times, args=()):
-        run_times = [func(*args) for _ in range(times)]
+        """
+        Repeat running *func* for *times* in a row, and collect the
+        amount of time it takes to do so.
+
+        If we are running in threads, then the entire time it takes to
+        do this process is added up and returned. This is because we cannot
+        measure the time taken to execute *just* a single function when
+        functions are executing concurrently. Doing so will vastly
+        over value some executions and undervalue others. As a result, we
+        will not be able to compute meaningful standard deviations.
+
+        *func* should return (total time, time to exclude). The excluded time
+        should be locked so that it cannot overlap other excluded areas.
+
+
+        """
+        begin = perf_counter()
+        run_exc_times = [func(*args) for _ in range(times)]
+        end = perf_counter()
+        total = end - begin
+
+        if self.mp_strategy == 'threads':
+            exc_times = [x[1] for x in run_exc_times]
+            excluded = sum(exc_times)
+            total = total - excluded
+            run_times = [total / times for _ in range(times)]
+        else:
+            run_times = [x[0] - x[1] for x in run_exc_times]
         return run_times
 
 
     def write_test(self, db_factory, thread_number, sync):
         db = db_factory()
 
-        @_TimedDBFunction(db)
+        @_TimedDBFunction(db, self.__excluded_time_lock)
         def do_add(conn):
             root = conn.root()
             m = root['speedtest'][thread_number]
@@ -293,16 +440,18 @@ class AbstractSpeedTest(object):
         add_time = self._execute(self._times_of_runs, 'add', thread_number,
                                  do_add, self.individual_test_reps)
 
-        @_TimedDBFunction(db)
+        @_TimedDBFunction(db, self.__excluded_time_lock)
         def do_update(conn):
             root = conn.root()
             self._write_test_update_values(itervalues(root['speedtest'][thread_number]))
 
-        sync()
+        self._sync_and_collect(thread_number, sync)
         update_time = self._execute(self._times_of_runs, 'update', thread_number,
                                     do_update, self.individual_test_reps)
 
-        time.sleep(.1)
+        # XXX: Why were we sleeping?
+        # time.sleep(.1)
+
         # In shared thread mode, db.close() doesn't actually do anything.
         db.close()
         return [WriteTimes(a, u) for a, u in zip(add_time, update_time)]
@@ -312,6 +461,7 @@ class AbstractSpeedTest(object):
 
     def read_test(self, db_factory, thread_number, sync):
         db = db_factory()
+        #print('**** Created db for read', db)
         # Explicitly set the number of cached objects so we're
         # using the storage in an understandable way.
         # Set to double the number of objects we should have created
@@ -323,25 +473,40 @@ class AbstractSpeedTest(object):
             if got != self.objects_per_txn:
                 raise AssertionError('data mismatch')
 
-        @_TimedDBFunction(db)
+        @_TimedDBFunction(db, self.__excluded_time_lock)
         def do_steamin_read(conn):
             do_read_loop(conn)
 
         def do_cold_read():
             # Clear *all* the caches before opening any connections or
-            # beginning any timing
-            self._wait_for_master_to_do(thread_number, sync, self._clear_all_caches, db)
-            return do_steamin_read() # pylint:disable=no-value-for-parameter
+            # beginning any timing.
+            begin = perf_counter()
+            clear_time = self._wait_for_master_to_do(thread_number,
+                                                     sync,
+                                                     self._clear_all_caches,
+                                                     db,
+                                                     thread_number,
+                                                     sync)
+            _, s_excluded = do_steamin_read() # pylint:disable=no-value-for-parameter
+            end = perf_counter()
 
-        @_TimedDBFunction(db)
+            total = end - begin
+
+            total_excluded = clear_time + s_excluded
+
+            return (total, total_excluded)
+
+        @_TimedDBFunction(db, self.__excluded_time_lock)
         def do_hot_read(conn):
             # sadly we have to include this time in our
             # timings because opening the connection must
             # be included. hopefully this is too fast to have an impact.
+            #print('**** doing hot')
             conn.cacheMinimize()
             do_read_loop(conn)
 
-        db.open().close()
+        db.open().close() # ensure we have a connection open
+        self._sync_and_collect(thread_number, sync)
         sync()
         # In shared thread mode, the 'warm' test, immediately following the update test,
         # is similar to the steamin test, because we're likely to get the same
@@ -349,21 +514,24 @@ class AbstractSpeedTest(object):
         # Of course, this really only applies when self.concurrency is 1; for other
         # values, we can't be sure. Also note that we only execute this once
         # (because after that caches are primed).
-        warm = self._execute(do_steamin_read, 'warm', thread_number)
+        warm_total, warm_excluded = self._execute(do_steamin_read, 'warm', thread_number)
+        warm = warm_total - warm_excluded
 
-        sync()
+
+        sync() # WE're about to GC, no need to do it here.
         cold = self._execute(self._times_of_runs, 'cold', thread_number,
                              do_cold_read, self.individual_test_reps)
 
-        sync()
+        self._sync_and_collect(thread_number, sync)
         hot = self._execute(self._times_of_runs, 'hot', thread_number,
                             do_hot_read, self.individual_test_reps)
 
-        sync()
+        self._sync_and_collect(thread_number, sync)
         steamin = self._execute(self._times_of_runs, 'steamin', thread_number,
                                 do_steamin_read, self.individual_test_reps)
 
         db.close()
+
         return [ReadTimes(w, c, h, s) for w, c, h, s
                 in zip([warm] * self.individual_test_reps,
                        cold, hot, steamin)]
@@ -380,22 +548,14 @@ class AbstractSpeedTest(object):
         txt_fn = os.path.join(self.profile_dir, basename + ".txt")
         prof_fn = os.path.join(self.profile_dir, basename + ".prof")
 
-        profiler = cProfile.Profile()
-        profiler.enable()
-        try:
-            res = func(*args)
-        finally:
-            profiler.disable()
 
-        profiler.dump_stats(prof_fn)
 
-        with open(txt_fn, 'w') as f:
-            st = Stats(profiler, stream=f)
-            st.strip_dirs()
-            st.sort_stats('cumulative')
-            st.print_stats()
+        profile_class = useVMProf
 
-        return res
+
+        with profile_class(prof_fn, txt_fn):
+            return func(*args)
+
 
     def run(self, db_factory, contender_name, rep):
         """Run a write and read test.
