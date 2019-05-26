@@ -111,17 +111,20 @@ class _TimedDBFunction(object):
     # conn.close() does not talk to the storage, but it does
     # do some cache maintenance and should be excluded if possible.
 
-    def __init__(self, db, excluded_time_lock):
+    def __init__(self, db, excluded_time_lock, load_count=None, store_count=None):
         self.db = db
         self._excluded_time_lock = excluded_time_lock
+        self.load_count = load_count
+        self.store_count = store_count
 
     def _close_conn(self, conn, func_name):
         with self._excluded_time_lock:
             loads, stores = conn.getTransferCounts(True)
             db_name = conn.db().database_name
-            logger.debug("DB %s conn %s func %s loads %s stores %s",
-                         db_name, conn, func_name, loads, stores)
+            logger.info("DB %s conn %s func %s loads %s stores %s",
+                        db_name, conn, func_name, loads, stores)
             conn.close()
+            return loads, stores
 
 
     def __call__(self, func):
@@ -129,17 +132,31 @@ class _TimedDBFunction(object):
         db = self.db
 
         @wraps(func)
-        def timer(*args, **kwargs):
+        def timer(check_transfers=True):
             start = perf_counter()
 
             conn = db.open()
 
-            func(conn, *args, **kwargs)
+            func(conn)
 
             transaction.commit()
             after_commit = perf_counter()
-            self._close_conn(conn, func.__name__)
+            loads, stores = self._close_conn(conn, func.__name__)
             end = perf_counter()
+
+            if check_transfers:
+                tx_msg = None
+                if self.load_count is not None:
+                    if (self.load_count == 0 and loads > 0) or loads < self.load_count:
+                        tx_msg = "Expected %s loads, but was %s" % (
+                            self.load_count, loads)
+                if self.store_count is not None:
+                    if (self.store_count == 0 and stores > 0) or stores < self.store_count:
+                        tx_msg = "Expected %s stores, but was %s" % (
+                            self.store_count, stores)
+                if tx_msg:
+                    logger.error("DB %s conn %s func %s: %s",
+                                 db, conn, func.__name__, tx_msg)
             return (end - start, end - after_commit)
         return timer
 
@@ -256,7 +273,7 @@ class AbstractSpeedTest(object):
     # that's a good time for the master to also do GC. Nobody should be timing anything
     # at that point.
 
-    def _wait_for_master_to_do(self, _thread_number, _sync, func, *args):
+    def _wait_for_master_to_do(self, _thread_number, _sync, _sync_name, func, *args):
         # We are the only thing running, this object is not shared,
         # func must always be called.
 
@@ -266,7 +283,7 @@ class AbstractSpeedTest(object):
         end = perf_counter()
         return end - begin
 
-    def _threaded_wait_for_master_to_do(self, thread_number, sync, func, *args):
+    def _threaded_wait_for_master_to_do(self, thread_number, sync, sync_name, func, *args):
         """
         Block all threads until *func* is called by the first thread (0).
 
@@ -275,22 +292,23 @@ class AbstractSpeedTest(object):
         TODO: This might be a good way to handle profiling enable/disable
         so we can be sure to capture all the activity in a single phase.
         """
+        # Caution: The called function must not attempt to use sync().
         begin = perf_counter()
-        sync()
+        sync(sync_name)
         if thread_number == 0:
             func(*args)
-        sync()
+        sync(sync_name + ' after')
         end = perf_counter()
         return end - begin
 
-    def _sync_and_collect(self, thread_number, sync):
+    def _sync_and_collect(self, thread_number, sync, sync_name):
         # Even if our DB's are unique, we only want to do this in the
         # master OR if we're in mp mode
         if self.mp_strategy == 'mp':
-            sync()
+            sync(sync_name)
             gc.collect()
         else:
-            self._threaded_wait_for_master_to_do(thread_number, sync, gc.collect)
+            self._threaded_wait_for_master_to_do(thread_number, sync, sync_name, gc.collect)
 
     def _guarantee_min_random_data(self, count):
         if len(self.__random_data) < count:
@@ -360,9 +378,11 @@ class AbstractSpeedTest(object):
         db.close()
         logger.debug('Populated storage.')
 
-    def _clear_all_caches(self, db, thread_number, sync):
+    def _clear_all_caches(self, db):
         # Clear all caches, returns how long that took.
         # No connection should be open when this is called.
+
+        # This should be called in the master only.
 
         # For gevent, we need to be as careful as possible that this
         # function doesn't switch (or at least can't be entered
@@ -390,9 +410,12 @@ class AbstractSpeedTest(object):
             if hasattr(db.storage, '_cache'):
                 db.storage._cache.clear()
 
-        # We probably just made a bunch of garbage. Try to get rid of it
-        # before we go in earnest to eliminate the knock-on effect
-        self._sync_and_collect(thread_number, sync)
+            # We probably just made a bunch of garbage. Try to get rid of it
+            # before we go in earnest to eliminate the knock-on effect.
+            # We're already in the master, and it's not safe to call sync()
+            # again, so just do it.
+            gc.collect()
+
 
     def _times_of_runs(self, func, times, args=()):
         """
@@ -429,23 +452,25 @@ class AbstractSpeedTest(object):
     def write_test(self, db_factory, thread_number, sync):
         db = db_factory()
 
-        @_TimedDBFunction(db, self.__excluded_time_lock)
+        @_TimedDBFunction(db, self.__excluded_time_lock,
+                          store_count=self.objects_per_txn)
         def do_add(conn):
             root = conn.root()
             m = root['speedtest'][thread_number]
             m.update(self.data_to_store())
 
         db.open().close()
-        sync()
+        sync('add')
         add_time = self._execute(self._times_of_runs, 'add', thread_number,
                                  do_add, self.individual_test_reps)
 
-        @_TimedDBFunction(db, self.__excluded_time_lock)
+        @_TimedDBFunction(db, self.__excluded_time_lock,
+                          store_count=self.objects_per_txn)
         def do_update(conn):
             root = conn.root()
             self._write_test_update_values(itervalues(root['speedtest'][thread_number]))
 
-        self._sync_and_collect(thread_number, sync)
+        self._sync_and_collect(thread_number, sync, "update")
         update_time = self._execute(self._times_of_runs, 'update', thread_number,
                                     do_update, self.individual_test_reps)
 
@@ -473,8 +498,18 @@ class AbstractSpeedTest(object):
             if got != self.objects_per_txn:
                 raise AssertionError('data mismatch')
 
-        @_TimedDBFunction(db, self.__excluded_time_lock)
+        @_TimedDBFunction(db, self.__excluded_time_lock,
+                          load_count=0, store_count=0)
         def do_steamin_read(conn):
+            do_read_loop(conn)
+
+        @_TimedDBFunction(db, self.__excluded_time_lock,
+                          load_count=self.objects_per_txn, store_count=0)
+        def _do_cold_read(conn):
+            do_read_loop(conn)
+
+        @_TimedDBFunction(db, self.__excluded_time_lock)
+        def do_warm_read(conn):
             do_read_loop(conn)
 
         def do_cold_read():
@@ -483,11 +518,11 @@ class AbstractSpeedTest(object):
             begin = perf_counter()
             clear_time = self._wait_for_master_to_do(thread_number,
                                                      sync,
+                                                     'cold read clear caches',
                                                      self._clear_all_caches,
-                                                     db,
-                                                     thread_number,
-                                                     sync)
-            _, s_excluded = do_steamin_read() # pylint:disable=no-value-for-parameter
+                                                     db)
+            # pylint:disable=no-value-for-parameter,unexpected-keyword-arg
+            _, s_excluded = _do_cold_read()
             end = perf_counter()
 
             total = end - begin
@@ -506,27 +541,28 @@ class AbstractSpeedTest(object):
             do_read_loop(conn)
 
         db.open().close() # ensure we have a connection open
-        self._sync_and_collect(thread_number, sync)
-        sync()
+        self._sync_and_collect(thread_number, sync, "warm")
         # In shared thread mode, the 'warm' test, immediately following the update test,
         # is similar to the steamin test, because we're likely to get the same
         # Connection object again (because the DB wasn't really closed.)
         # Of course, this really only applies when self.concurrency is 1; for other
         # values, we can't be sure. Also note that we only execute this once
         # (because after that caches are primed).
-        warm_total, warm_excluded = self._execute(do_steamin_read, 'warm', thread_number)
+        warm_total, warm_excluded = self._execute(do_warm_read, 'warm', thread_number)
         warm = warm_total - warm_excluded
 
-
-        sync() # WE're about to GC, no need to do it here.
+        sync('cold') # We're about to GC, no need to do it here.
         cold = self._execute(self._times_of_runs, 'cold', thread_number,
                              do_cold_read, self.individual_test_reps)
 
-        self._sync_and_collect(thread_number, sync)
+        self._sync_and_collect(thread_number, sync, 'hot')
         hot = self._execute(self._times_of_runs, 'hot', thread_number,
                             do_hot_read, self.individual_test_reps)
 
-        self._sync_and_collect(thread_number, sync)
+        # XXX: TODO: We want to be able to guarantee that we get the same Connection object
+        # each time. Ideally we aren't opening and closing it each test repetition.
+        # Otherwise we have no guarantee that our hot cached objects are actually hot.
+        self._sync_and_collect(thread_number, sync, 'steamin')
         steamin = self._execute(self._times_of_runs, 'steamin', thread_number,
                                 do_steamin_read, self.individual_test_reps)
 
@@ -550,7 +586,7 @@ class AbstractSpeedTest(object):
 
 
 
-        profile_class = useVMProf
+        profile_class = useCProfile #useVMProf
 
 
         with profile_class(prof_fn, txt_fn):

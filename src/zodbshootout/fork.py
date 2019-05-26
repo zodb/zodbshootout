@@ -124,8 +124,8 @@ class Child(object):
             if hasattr(self.child_queue, 'close'):
                 self.child_queue.close()
 
-    def sync(self):
-        self.parent_queue.put((self.child_num, 'sync', None))
+    def sync(self, name):
+        self.parent_queue.put((self.child_num, 'sync', name))
         resume_time = self.child_queue.get()
         now = time.time()
         if now > resume_time:
@@ -143,6 +143,10 @@ class Child(object):
             # and does so while allowing threads and interrupts. In
             # gevent, it lets the loop cycle.
             time.sleep(0.0001)
+
+
+    def __str__(self):
+        return "Child(%s)" % (self.child_num,)
 
 
 class SynclessChild(Child):
@@ -165,7 +169,11 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
             child.start()
 
         results = []
-        sync_waiting = set(children)
+        # Map from a string naming a sync point to the
+        # set of children (numbers) that are waiting there.
+        # This should only ever have at most one name in it; if there are
+        # more, it means we're trying to nest sync points.
+        sync_waiting = {}
 
         before_poll()
 
@@ -202,17 +210,22 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
             elif msg == 'system_exit':
                 raise UnexpectedChildDeathError()
             elif msg == 'sync':
-                sync_waiting.remove(child_num)
+                if arg not in sync_waiting:
+                    sync_waiting[arg] = set()
+                sync_waiting[arg].add(child_num)
+                if len(sync_waiting) != 1:
+                    raise AssertionError("Children at different sync points!")
             else:
                 raise AssertionError("unknown message: %s" % msg)
 
-            if not sync_waiting:
+            if msg == 'sync' and len(sync_waiting[arg]) == len(children):
                 # All children have called sync(), so tell them
                 # to resume shortly and set up for another sync.
+                del sync_waiting[arg] # = set(children)
+                assert not sync_waiting
                 resume_time = time.time() + MESSAGE_DELAY
                 for child in children.values():
                     child.child_queue.put(resume_time)
-                sync_waiting = set(children)
 
         return results
     finally:

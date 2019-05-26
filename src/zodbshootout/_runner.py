@@ -216,20 +216,28 @@ def _run_one_contender(options, speedtest, contender_name, db_conf):
     Return a list of (write_times, read_times) tuples.
     """
 
-    def make_factory():
+    def make_shared_factory():
         _db = db_conf.open()
+        _db.setPoolSize(speedtest.concurrency * 2)
         return _db, _db.close, lambda: _db
+
+    def make_normal_factory():
+        def f():
+            db = db_conf.open()
+            db.setPoolSize(speedtest.concurrency * 2)
+            return db
+        return f
 
     results = []
     prep_leaks, show_leaks = _make_leak_check(options)
 
     for rep in range(options.repetitions):
         if options.threads == 'shared':
-            _db, db_close, db_factory = make_factory()
+            _db, db_close, db_factory = make_shared_factory()
             _db.close = lambda: None
             _db.pack = lambda: None
         else:
-            db_factory = db_conf.open
+            db_factory = make_normal_factory()
             db_close = lambda: None
         # After the DB is opened, so modules, etc, are imported.
         prep_leaks()
