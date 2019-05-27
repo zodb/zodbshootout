@@ -19,31 +19,21 @@ from __future__ import print_function, absolute_import
 # This file is imported after gevent monkey patching (if applicable)
 # so it's safe to import anything.
 import gc
-from collections import namedtuple
-from functools import partial
-from functools import wraps
-from itertools import chain
+
 from pstats import Stats
-from threading import Lock
+
 
 import cProfile
 
-import os
 import random
-import statistics
 
-try:
-    from time import perf_counter
-except ImportError:
-    from backports.time_perf_counter import perf_counter
+from pyperf import perf_counter
 
 import transaction
 
 from persistent.mapping import PersistentMapping
 from persistent.list import PersistentList
 
-from .fork import distribute
-from .fork import run_in_child
 from ._pobject import pobject_base_size
 from ._pobject import PObject
 from ._pblobobject import BlobObject
@@ -89,76 +79,6 @@ def _random_data(size):
 
 _random_data(100) # call once for the sake of leak checks
 
-WriteTimes = namedtuple('WriteTimes', ['add_time', 'update_time'])
-ReadTimes = namedtuple('ReadTimes', ['warm_time', 'cold_time', 'hot_time', 'steamin_time'])
-SpeedTestTimes = namedtuple('SpeedTestTimes', WriteTimes._fields + ReadTimes._fields)
-
-class _TimedDBFunction(object):
-    """
-    Decorator factory for a function that
-    opens a DB, does something while taking the clock time,
-    then closes the DB and returns the (total_time, time_to_exclude).
-
-    The wrapped function takes the root of the connection as
-    its first argument and then any other arguments.
-
-    The transaction is committed before closing the connection
-    and after running the function.
-    """
-
-    # We should always include conn.open() inside our times,
-    # because it talks to the storage to poll invalidations.
-    # conn.close() does not talk to the storage, but it does
-    # do some cache maintenance and should be excluded if possible.
-
-    def __init__(self, db, excluded_time_lock, load_count=None, store_count=None):
-        self.db = db
-        self._excluded_time_lock = excluded_time_lock
-        self.load_count = load_count
-        self.store_count = store_count
-
-    def _close_conn(self, conn, func_name):
-        with self._excluded_time_lock:
-            loads, stores = conn.getTransferCounts(True)
-            db_name = conn.db().database_name
-            logger.info("DB %s conn %s func %s loads %s stores %s",
-                        db_name, conn, func_name, loads, stores)
-            conn.close()
-            return loads, stores
-
-
-    def __call__(self, func):
-        _close_conn = self._close_conn
-        db = self.db
-
-        @wraps(func)
-        def timer(check_transfers=True):
-            start = perf_counter()
-
-            conn = db.open()
-
-            func(conn)
-
-            transaction.commit()
-            after_commit = perf_counter()
-            loads, stores = self._close_conn(conn, func.__name__)
-            end = perf_counter()
-
-            if check_transfers:
-                tx_msg = None
-                if self.load_count is not None:
-                    if (self.load_count == 0 and loads > 0) or loads < self.load_count:
-                        tx_msg = "Expected %s loads, but was %s" % (
-                            self.load_count, loads)
-                if self.store_count is not None:
-                    if (self.store_count == 0 and stores > 0) or stores < self.store_count:
-                        tx_msg = "Expected %s stores, but was %s" % (
-                            self.store_count, stores)
-                if tx_msg:
-                    logger.error("DB %s conn %s func %s: %s",
-                                 db, conn, func.__name__, tx_msg)
-            return (end - start, end - after_commit)
-        return timer
 
 class AbstractProfiler(object):
     enabled = False
@@ -220,95 +140,71 @@ class useVMProf(AbstractProfiler):
         self.stat_file.flush()
         self.stat_file.close()
 
-class AbstractSpeedTest(object):
+class SpeedTestData(object):
 
     MappingType = PersistentMapping
     ObjectType = PObject
-
-
-    individual_test_reps = 20
     min_object_count = 0
 
-    def __new__(cls, *_args, **kwargs):
-        if kwargs.pop('use_blobs', False):
-            cls = BlobSpeedTest
-        inst = super(AbstractSpeedTest, cls).__new__(cls)
-        return inst
 
-    def __init__(self, concurrency, objects_per_txn, object_size,
-                 profile_dir=None,
-                 mp_strategy='mp',
-                 test_reps=None,
-                 **_kwargs):
-        """
+    class AttributeAccessor(object):
 
-        :keyword str mp_strategy: A string naming the
-           concurrency strategy. If it is either 'shared' or 'unique',
-           we will be running all tests in a single process using threads or greenlets.
-           Otherwise it must be 'mp', meaning that we will be running each test
-           in its own process.
-        """
-        self.concurrency = concurrency
+        def write_test_update_values(self, values):
+            count = 0
+            for obj in values:
+                obj.attr = 1
+                count += 1
+            return count
+
+        def read_test_read_values(self, values):
+            got = 0
+
+            for obj in values:
+                got += obj.attr
+            return got
+
+    class BlobAccessor(object):
+
+        ObjectType = BlobObject
+
+        def write_test_update_values(self, values):
+            count = 0
+            for obj in values:
+                with obj.blob.open('w') as f:
+                    f.write(obj._v_seen_data)
+                obj.attr = 1
+                count += 1
+            return count
+
+        def read_test_read_values(self, values):
+            got = 0
+
+            for obj in values:
+                with obj.blob.open('r') as f:
+                    obj._v_seen_data = f.read
+                got += obj.attr
+            return got
+
+
+    def __init__(self, num_workers, objects_per_txn, object_size,
+                 use_blobs=False):
         self.objects_per_txn = objects_per_txn
         self.object_size = object_size
-        self.profile_dir = profile_dir
-        self.contender_name = None
-        if mp_strategy in ('shared', 'unique'):
-            self.mp_strategy = 'threads'
-        else:
-            assert mp_strategy == 'mp'
-            self.mp_strategy = mp_strategy
-
-        if test_reps:
-            self.individual_test_reps = test_reps
-        self.rep = 0  # repetition number
-
-        if mp_strategy == 'shared':
-            self._wait_for_master_to_do = self._threaded_wait_for_master_to_do
-
         self.__random_data = []
-        self.__excluded_time_lock = Lock()
+        self.concurrency = num_workers
 
-    # When everybody is waiting for the master to do something,
-    # that's a good time for the master to also do GC. Nobody should be timing anything
-    # at that point.
+        if use_blobs:
+            self.ObjectType = BlobObject
 
-    def _wait_for_master_to_do(self, _thread_number, _sync, _sync_name, func, *args):
-        # We are the only thing running, this object is not shared,
-        # func must always be called.
-
-        # Return how long this took.
-        begin = perf_counter()
-        func(*args)
-        end = perf_counter()
-        return end - begin
-
-    def _threaded_wait_for_master_to_do(self, thread_number, sync, sync_name, func, *args):
-        """
-        Block all threads until *func* is called by the first thread (0).
-
-        Return how long this took in the current thread.
-
-        TODO: This might be a good way to handle profiling enable/disable
-        so we can be sure to capture all the activity in a single phase.
-        """
-        # Caution: The called function must not attempt to use sync().
-        begin = perf_counter()
-        sync(sync_name)
-        if thread_number == 0:
-            func(*args)
-        sync(sync_name + ' after')
-        end = perf_counter()
-        return end - begin
-
-    def _sync_and_collect(self, thread_number, sync, sync_name):
-        # Even if our DB's are unique, we only want to do this in the
-        # master OR if we're in mp mode
-        if self.mp_strategy == 'mp':
-            sync(sync_name)
-            gc.collect()
+            if self.object_size == pobject_base_size:
+                # This won't be big enough to actually get any data.
+                self.object_size = self.object_size * 2
+            accessor = self.BlobAccessor()
         else:
-            self._threaded_wait_for_master_to_do(thread_number, sync, sync_name, gc.collect)
+            accessor = self.AttributeAccessor()
+
+        self.read_test_read_values = accessor.read_test_read_values
+        self.write_test_update_values = accessor.write_test_update_values
 
     def _guarantee_min_random_data(self, count):
         if len(self.__random_data) < count:
@@ -329,18 +225,26 @@ class AbstractSpeedTest(object):
         data = self.__random_data
         return dict((n, kind(data[n])) for n in range(count))
 
+    def data_for_worker(self, root, worker):
+        return root['speedtest'][worker.worker_number]
+
     def populate(self, db_factory):
         self._guarantee_min_random_data(self.objects_per_txn)
 
         db = db_factory()
         conn = db.open()
         root = conn.root()
+        self._populate_into_open_database(db, conn, root)
+        conn.close()
+        db.close()
 
+    def _populate_into_open_database(self, db, conn, root):
         # clear the database
         root['speedtest'] = None
         # We explicitly leave the `speedtest_min` value around
         # so that it can survive packs.
         transaction.commit()
+        # XXX: Why are we packing here?
         db.pack()
 
         # Make sure the minimum objects are present
@@ -374,9 +278,27 @@ class AbstractSpeedTest(object):
         for i in range(self.concurrency):
             t[i] = self.MappingType()
         transaction.commit()
-        conn.close()
-        db.close()
         logger.debug('Populated storage.')
+
+
+class SpeedTestWorker(object):
+    worker_number = 0
+
+    def __init__(self, worker_number, data):
+        self.data = data
+        self.worker_number = worker_number
+
+    @property
+    def objects_per_txn(self):
+        return self.data.objects_per_txn
+
+    def data_to_store(self):
+        return self.data.data_to_store()
+
+    def sync(self, name):
+        # Replace this with something that does something if you
+        # know you need to really sync up to prevent interference.
+        pass
 
     def _clear_all_caches(self, db):
         # Clear all caches, returns how long that took.
@@ -397,7 +319,8 @@ class AbstractSpeedTest(object):
         # storage cache and then moves on with the test. Each
         # successive greenlet waits longer and longer before starting
         # the test.
-        with self.__excluded_time_lock:
+        self.sync('before clear')
+        if self.worker_number == 0:
             db.pool.map(lambda c: c.cacheMinimize())
             # In ZODB 5, db.storage is the storage object passed to the DB object.
             # If it doesn't implement IMVCCStorage, then an adapter is wrapped
@@ -415,256 +338,195 @@ class AbstractSpeedTest(object):
             # We're already in the master, and it's not safe to call sync()
             # again, so just do it.
             gc.collect()
+        self.sync('after clear')
 
+    def __check_access_count(self, accessed, loops=1):
+        if accessed != self.objects_per_txn * loops:
+            raise AssertionError('data mismatch; expected %s got %s' % (
+                self.objects_per_txn, accessed))
 
-    def _times_of_runs(self, func, times, args=()):
-        """
-        Repeat running *func* for *times* in a row, and collect the
-        amount of time it takes to do so.
+    def __conn_did_not_load(self, conn):
+        loads, _ = conn.getTransferCounts(True)
+        if loads != 0:
+            raise AssertionError("Loaded data; expected 0, got %s" % (loads,))
 
-        If we are running in threads, then the entire time it takes to
-        do this process is added up and returned. This is because we cannot
-        measure the time taken to execute *just* a single function when
-        functions are executing concurrently. Doing so will vastly
-        over value some executions and undervalue others. As a result, we
-        will not be able to compute meaningful standard deviations.
+    def __conn_did_load_objects(self, conn, loops=1, data=None):
+        loads, _ = conn.getTransferCounts(True)
+        if loads < self.objects_per_txn * loops:
+            raise AssertionError("Didn't load enough data from %s; expected %s, got %s (out of %s)" % (
+                conn,
+                self.objects_per_txn * loops,
+                loads,
+                len(data) if data is not None else None,
+            ))
 
-        *func* should return (total time, time to exclude). The excluded time
-        should be locked so that it cannot overlap other excluded areas.
-
-
-        """
+    def bench_add(self, loops, db_factory):
+        db = db_factory()
         begin = perf_counter()
-        run_exc_times = [func(*args) for _ in range(times)]
-        end = perf_counter()
-        total = end - begin
+        conn = db.open()
+        root = conn.root()
 
-        if self.mp_strategy == 'threads':
-            exc_times = [x[1] for x in run_exc_times]
-            excluded = sum(exc_times)
-            total = total - excluded
-            run_times = [total / times for _ in range(times)]
-        else:
-            run_times = [x[0] - x[1] for x in run_exc_times]
-        return run_times
-
-
-    def write_test(self, db_factory, thread_number, sync):
-        db = db_factory()
-
-        @_TimedDBFunction(db, self.__excluded_time_lock,
-                          store_count=self.objects_per_txn)
-        def do_add(conn):
-            root = conn.root()
-            m = root['speedtest'][thread_number]
+        for _ in range(loops):
+            m = self.data.data_for_worker(root, self)
             m.update(self.data_to_store())
+            transaction.commit()
 
-        db.open().close()
-        sync('add')
-        add_time = self._execute(self._times_of_runs, 'add', thread_number,
-                                 do_add, self.individual_test_reps)
-
-        @_TimedDBFunction(db, self.__excluded_time_lock,
-                          store_count=self.objects_per_txn)
-        def do_update(conn):
-            root = conn.root()
-            self._write_test_update_values(itervalues(root['speedtest'][thread_number]))
-
-        self._sync_and_collect(thread_number, sync, "update")
-        update_time = self._execute(self._times_of_runs, 'update', thread_number,
-                                    do_update, self.individual_test_reps)
-
-        # XXX: Why were we sleeping?
-        # time.sleep(.1)
-
-        # In shared thread mode, db.close() doesn't actually do anything.
+        end = perf_counter()
+        conn.close()
         db.close()
-        return [WriteTimes(a, u) for a, u in zip(add_time, update_time)]
+        duration = end - begin
+        return duration
 
-    def _write_test_update_values(self, values):
-        raise NotImplementedError()
-
-    def read_test(self, db_factory, thread_number, sync):
+    def bench_update(self, loops, db_factory):
         db = db_factory()
-        #print('**** Created db for read', db)
+        begin = perf_counter()
+        conn = db.open()
+        root = conn.root()
+        got = 0
+        for _ in range(loops):
+            m = self.data.data_for_worker(root, self)
+            got += self.data.write_test_update_values(itervalues(m))
+            transaction.commit()
+        end = perf_counter()
+
+        conn.close()
+        self.__check_access_count(got, loops)
+        db.close()
+        duration = end - begin
+        return duration
+
+    def bench_read_after_write(self, loops, db_factory):
+        # This is what used to be called the 'warm' read:
+        # Read back items in the next transaction that were just written in the
+        # previous transaction. This benefits databases that have a shared
+        # cache.
+
+        # To capture the cache-churning effects this might have, we
+        # include both read and write times. (This also means we have
+        # to loop fewer times to get stable results.) The old 'warm'
+        # didn't include the write time, and didn't loop at all.
+
+        duration = 0
+        got = 0
+        for _ in range(loops):
+            db = db_factory()
+            db.setCacheSize(self.objects_per_txn * 3)
+
+            begin = perf_counter()
+            conn = db.open()
+            root = conn.root()
+            m = self.data.data_for_worker(root, self)
+            self.data.write_test_update_values(itervalues(m))
+            transaction.commit()
+
+            got += self.data.read_test_read_values(itervalues(m))
+            transaction.commit()
+            end = perf_counter()
+            duration += (end - begin)
+
+            conn.close()
+            self._clear_all_caches(db)
+            db.close()
+
+        self.__check_access_count(got, loops)
+        return duration
+
+    def bench_cold_read(self, loops, db_factory):
+        # Because each of these is run in its own process, if we're
+        # run first, then any in-memory cache is already as cold as
+        # it's going to get. Of course, that's only true for our first run through,
+        # so we need to carefully maintain that status as we go forward.
+
+        # "icy" is defined as: No local storage cache, and no connection (pickle) cache;
+        # we achieve this by closing the database on each run. (Of course, if we have
+        # a mapping storage, we can't actually do that. So we also try to explicitly
+        # clear caches.)
+        duration = 0
+        got = 0
+        for _ in range(loops):
+            db = db_factory()
+            begin = perf_counter()
+            conn = db.open()
+            root = conn.root()
+
+            m = self.data.data_for_worker(root, self)
+            got += self.data.read_test_read_values(itervalues(m))
+            transaction.commit()
+            end = perf_counter()
+            duration += (end - begin)
+
+            self.__conn_did_load_objects(conn, data=m)
+            conn.close()
+
+            self._clear_all_caches(db)
+            db.close()
+            gc.collect()
+
+        self.__check_access_count(got, loops)
+
+        return duration
+
+    def __prime_caches(self, db):
         # Explicitly set the number of cached objects so we're
         # using the storage in an understandable way.
         # Set to double the number of objects we should have created
         # to account for btree nodes.
-        db.setCacheSize(self.objects_per_txn * 2)
+        db.setCacheSize(self.objects_per_txn * 3)
 
-        def do_read_loop(conn):
-            got = self._read_test_read_values(itervalues(conn.root()['speedtest'][thread_number]))
-            if got != self.objects_per_txn:
-                raise AssertionError('data mismatch')
+        conn = db.open()
+        root = conn.root()
+        m = self.data.data_for_worker(root, self)
+        got = self.data.read_test_read_values(itervalues(m))
+        self.__check_access_count(got, 1)
+        # Clear the transfer counts before continuing
+        conn.getTransferCounts(True)
+        return conn, root
 
-        @_TimedDBFunction(db, self.__excluded_time_lock,
-                          load_count=0, store_count=0)
-        def do_steamin_read(conn):
-            do_read_loop(conn)
+    def bench_steamin_read(self, loops, db_factory):
+        db = db_factory()
 
-        @_TimedDBFunction(db, self.__excluded_time_lock,
-                          load_count=self.objects_per_txn, store_count=0)
-        def _do_cold_read(conn):
-            do_read_loop(conn)
+        # First, prime the cache
+        conn, root = self.__prime_caches(db)
 
-        @_TimedDBFunction(db, self.__excluded_time_lock)
-        def do_warm_read(conn):
-            do_read_loop(conn)
+        # All the objects should now be cached locally, in the pickle cache
+        # and in the storage cache, if any
+        got = 0
+        m = self.data.data_for_worker(root, self)
+        begin = perf_counter()
+        for _ in range(loops):
+            got += self.data.read_test_read_values(itervalues(m))
+            transaction.abort()
+        end = perf_counter()
 
-        def do_cold_read():
-            # Clear *all* the caches before opening any connections or
-            # beginning any timing.
-            begin = perf_counter()
-            clear_time = self._wait_for_master_to_do(thread_number,
-                                                     sync,
-                                                     'cold read clear caches',
-                                                     self._clear_all_caches,
-                                                     db)
-            # pylint:disable=no-value-for-parameter,unexpected-keyword-arg
-            _, s_excluded = _do_cold_read()
-            end = perf_counter()
+        self.__check_access_count(got, loops)
+        self.__conn_did_not_load(conn)
 
-            total = end - begin
-
-            total_excluded = clear_time + s_excluded
-
-            return (total, total_excluded)
-
-        @_TimedDBFunction(db, self.__excluded_time_lock)
-        def do_hot_read(conn):
-            # sadly we have to include this time in our
-            # timings because opening the connection must
-            # be included. hopefully this is too fast to have an impact.
-            #print('**** doing hot')
-            conn.cacheMinimize()
-            do_read_loop(conn)
-
-        db.open().close() # ensure we have a connection open
-        self._sync_and_collect(thread_number, sync, "warm")
-        # In shared thread mode, the 'warm' test, immediately following the update test,
-        # is similar to the steamin test, because we're likely to get the same
-        # Connection object again (because the DB wasn't really closed.)
-        # Of course, this really only applies when self.concurrency is 1; for other
-        # values, we can't be sure. Also note that we only execute this once
-        # (because after that caches are primed).
-        warm_total, warm_excluded = self._execute(do_warm_read, 'warm', thread_number)
-        warm = warm_total - warm_excluded
-
-        sync('cold') # We're about to GC, no need to do it here.
-        cold = self._execute(self._times_of_runs, 'cold', thread_number,
-                             do_cold_read, self.individual_test_reps)
-
-        self._sync_and_collect(thread_number, sync, 'hot')
-        hot = self._execute(self._times_of_runs, 'hot', thread_number,
-                            do_hot_read, self.individual_test_reps)
-
-        # XXX: TODO: We want to be able to guarantee that we get the same Connection object
-        # each time. Ideally we aren't opening and closing it each test repetition.
-        # Otherwise we have no guarantee that our hot cached objects are actually hot.
-        self._sync_and_collect(thread_number, sync, 'steamin')
-        steamin = self._execute(self._times_of_runs, 'steamin', thread_number,
-                                do_steamin_read, self.individual_test_reps)
-
+        conn.close()
         db.close()
+        return end - begin
 
-        return [ReadTimes(w, c, h, s) for w, c, h, s
-                in zip([warm] * self.individual_test_reps,
-                       cold, hot, steamin)]
+    def bench_hot_read(self, loops, db_factory):
+        # In this test, we want all secondary caches to be well populated,
+        # but the connection pickle cache should be empty.
+        db = db_factory()
 
-    def _read_test_read_values(self, values):
-        raise NotImplementedError()
+        # First, prime the cache
+        conn, root = self.__prime_caches(db)
 
-    def _execute(self, func, phase_name, n, *args):
-        if not self.profile_dir:
-            return func(*args)
-
-        basename = '%s-%s-%d-%02d-%d' % (
-            self.contender_name, phase_name, self.objects_per_txn, n, self.rep)
-        txt_fn = os.path.join(self.profile_dir, basename + ".txt")
-        prof_fn = os.path.join(self.profile_dir, basename + ".prof")
-
-
-
-        profile_class = useCProfile #useVMProf
-
-
-        with profile_class(prof_fn, txt_fn):
-            return func(*args)
-
-
-    def run(self, db_factory, contender_name, rep):
-        """Run a write and read test.
-
-        Returns a list of SpeedTestTimes items containing the results
-        for every test, as well as a WriteTime and ReadTime summary
-        """
-        self.contender_name = contender_name
-        self.rep = rep
-
-        run_in_child(self.populate, self.mp_strategy, db_factory)
-
-
-        thread_numbers = list(range(self.concurrency))
-        write_times = distribute(partial(self.write_test, db_factory),
-                                 thread_numbers, strategy=self.mp_strategy)
-        read_times = distribute(partial(self.read_test, db_factory),
-                                thread_numbers, strategy=self.mp_strategy)
-
-        write_times = list(chain(*write_times))
-        read_times = list(chain(*read_times))
-
-        # Return the raw data here so as to not throw away any (more) data
-        times = [SpeedTestTimes(*(w + r)) for w, r in zip(write_times, read_times)]
-
-        # These are just for summary purpose
-        add_times = [t.add_time for t in write_times]
-        update_times = [t.update_time for t in write_times]
-        warm_times = [t.warm_time for t in read_times]
-        cold_times = [t.cold_time for t in read_times]
-        hot_times = [t.hot_time for t in read_times]
-        steamin_times = [t.steamin_time for t in read_times]
-
-        write_times = WriteTimes(*[statistics.mean(x) for x in (add_times, update_times)])
-        read_times = ReadTimes(*[statistics.mean(x) for x in (warm_times, cold_times, hot_times, steamin_times)])
-
-        return times, write_times, read_times
-
-class SpeedTest(AbstractSpeedTest):
-
-    def _write_test_update_values(self, values):
-        for obj in values:
-            obj.attr = 1
-
-    def _read_test_read_values(self, values):
+        duration = 0
         got = 0
+        for _ in range(loops):
+            conn.cacheMinimize()
+            m = self.data.data_for_worker(root, self)
+            begin = perf_counter()
+            got += self.data.read_test_read_values(itervalues(m))
+            transaction.abort()
+            end = perf_counter()
+            duration += (end - begin)
 
-        for obj in values:
-            got += obj.attr
-        return got
+        self.__check_access_count(got, loops)
+        self.__conn_did_load_objects(conn, loops)
 
-class BlobSpeedTest(SpeedTest):
-
-    ObjectType = BlobObject
-
-    def __init__(self, *args, **kwargs):
-        super(BlobSpeedTest, self).__init__(*args, **kwargs)
-
-        if self.object_size == pobject_base_size:
-            # This won't be big enough to actually get any data.
-            self.object_size = self.object_size * 2
-
-    def _write_test_update_values(self, values):
-        for obj in values:
-            with obj.blob.open('w') as f:
-                f.write(obj._v_seen_data)
-            obj.attr = 1
-
-    def _read_test_read_values(self, values):
-        got = 0
-
-        for obj in values:
-            with obj.blob.open('r') as f:
-                obj._v_seen_data = f.read
-            got += obj.attr
-        return got
+        conn.close()
+        db.close()
+        return duration

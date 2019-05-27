@@ -213,6 +213,7 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
                 if arg not in sync_waiting:
                     sync_waiting[arg] = set()
                 sync_waiting[arg].add(child_num)
+
                 if len(sync_waiting) != 1:
                     raise AssertionError("Children at different sync points!")
             else:
@@ -251,7 +252,7 @@ def distribute(func, param_iter, strategy='mp',
     The second parameter for each call is a "sync" function. The sync
     function pauses execution, then resumes all processes at
     approximately the same time. It is **required** that all child
-    processes will the sync function the same number of times.
+    processes call the sync function the same number of times.
 
     The results of calling the function are appended to a list, which
     is returned once all functions have returned.  If any function

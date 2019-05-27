@@ -19,13 +19,38 @@ from __future__ import print_function, absolute_import
 import argparse
 import sys
 
+from pyperf import Runner
+
 from ._pobject import pobject_base_size
 
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
 
-    parser = argparse.ArgumentParser()
+    def worker_args(cmd, args):
+        # Sadly, we have to manually put arguments that mean something to children
+        # back on. There's no easy 'unparse' we can use. Some of the options for
+        # pyperf, if we duplicate in the children, lead to errors (such as -o)
+        if args.counts:
+            cmd.extend(('--object-counts', str(args.counts[0])))
+        if args.object_size:
+            cmd.extend(('--object-size', str(args.object_size)))
+        if args.btrees:
+            cmd.extend("--btrees", args.btrees)
+        if args.use_blobs:
+            cmd.extend(("--blobs",))
+        if args.concurrency:
+            cmd.extend(("--concurrency", str(args.concurrency[0])))
+        if args.threads:
+            cmd.extend(("--threads", args.threads))
+        if args.gevent:
+            cmd.extend(("--gevent",))
+
+        cmd.append(args.config_file.name)
+
+
+    runner = Runner(add_cmdline_args=worker_args)
+    parser = runner.argparser
     prof_group = parser.add_argument_group("Profiling", "Control over profiling the database")
     obj_group = parser.add_argument_group("Objects", "Control the objects put in ZODB")
     con_group = parser.add_argument_group("Concurrency", "Control over concurrency")
@@ -34,11 +59,12 @@ def main(argv=None):
 
     # Objects
     obj_group.add_argument(
-        "-n", "--object-counts", dest="counts",
+        "--object-counts", dest="counts",
         type=int,
+        nargs="?",
         default=[],
         action="append",
-        help="Object counts to use (default 1000). Use this option as many times as you want.",
+        help="Object counts to use (default 1000).",
     )
     obj_group.add_argument(
         "-s", "--object-size", dest="object_size", default=pobject_base_size,
@@ -65,27 +91,14 @@ def main(argv=None):
         help="Use Blobs instead of pure persistent objects."
     )
 
-    # Repetitions
-    rep_group.add_argument(
-        '-r', '--repetitions', default=3,
-        type=int,
-        help="Number of repetitions of the complete test. The average values out of this many "
-        "repetitions will be displayed. Default is 3."
-    )
-    rep_group.add_argument(
-        "--test-reps", default=20,
-        type=int,
-        help="Number of repetitions of individual tests (such as add/update/cold/warm). "
-        "The average times of this many repetitions will be used. Default is 20."
-    )
-
     # Concurrency
     con_group.add_argument(
         "-c", "--concurrency", dest="concurrency",
         type=int,
         default=[],
         action="append",
-        help="Concurrency levels to use. Default is 2. Use this option as many times as you want."
+        nargs="?",
+        help="Concurrency level to use. Default is 2."
     )
     con_group.add_argument(
         "--threads", const="shared", default=False, nargs="?",
@@ -113,32 +126,24 @@ def main(argv=None):
         help="Enable logging in the root logger at the given level (INFO)"
     )
 
-    out_group.add_argument(
-        "--dump-json",
-        nargs="?",
-        const="-",
-        type=argparse.FileType('w'),
-        help="Dump the results in JSON to the specified file. Use '-' for stdout (or if no path is given)."
-        " NOTE: The JSON format is undocumented and subject to change at any time. It is intended to capture"
-        " more information than the printed CSV summary can in order to enable better statistical analysis."
-    )
-
     # Profiling
 
-    prof_group.add_argument(
-        "-p", "--profile", dest="profile_dir", default="",
-        help="Profile all tests and output results to the specified directory",
-    )
+    # prof_group.add_argument(
+    #     "-p", "--profile", dest="profile_dir", default="",
+    #     help="Profile all tests and output results to the specified directory",
+    # )
 
-    prof_group.add_argument(
-        "-l", "--leaks", dest='leaks', action='store_true', default=False,
-        help="Check for object leaks after every repetition. This only makes sense with --threads"
-    )
+    # prof_group.add_argument(
+    #     "-l", "--leaks", dest='leaks', action='store_true', default=False,
+    #     help="Check for object leaks after every repetition. This only makes sense with --threads"
+    # )
 
     parser.add_argument("config_file", type=argparse.FileType())
 
-    options = parser.parse_args(argv)
-
+    options = runner.parse_args(argv)
+    options.profile_dir = None
+    #import os
+    #print("In pid", os.getpid(), "Is worker?", options.worker)
     # Do the gevent stuff ASAP
     # BEFORE other imports..and make sure we use "threads".
     # Because with MP, we use MP.Queue which would hang if we
@@ -151,7 +156,7 @@ def main(argv=None):
 
 
     from ._runner import run_with_options
-    run_with_options(options)
+    run_with_options(runner, options)
 
 if __name__ == '__main__':
     main()
