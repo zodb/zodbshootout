@@ -48,36 +48,8 @@ def itervalues(d):
     return iv()
 
 
-
-with open(__file__, 'rb') as _f:
-    # Just use the this module as the source of our data
-    _random_file_data = _f.read().replace(b'\n', b'').split()
-del _f
-
 random.seed(__file__) # reproducible random functions
 
-def _random_data(size):
-    """
-    Create a random data of at least the given size.
-
-    Use pseudo-random data in case compression is in play so we get a more realistic
-    size and time value than a single 'x'*size would get.
-    """
-
-    def fdata():
-        words = _random_file_data
-        chunksize = min(size, 1024)
-        while True:
-            sample = random.sample(words, len(words) // 10)
-            yield b' '.join(sample[0:chunksize])
-    datagen = fdata()
-
-    data = b''
-    while len(data) < size:
-        data += next(datagen)
-    return data
-
-_random_data(100) # call once for the sake of leak checks
 
 
 class AbstractProfiler(object):
@@ -110,7 +82,6 @@ class AbstractProfiler(object):
 class useCProfile(AbstractProfiler):
 
     def _do_enter(self):
-
         self.profiler = cProfile.Profile()
         self.profiler.enable()
 
@@ -145,7 +116,6 @@ class SpeedTestData(object):
     MappingType = PersistentMapping
     ObjectType = PObject
     min_object_count = 0
-
 
     class AttributeAccessor(object):
 
@@ -187,11 +157,12 @@ class SpeedTestData(object):
 
 
     def __init__(self, num_workers, objects_per_txn, object_size,
-                 use_blobs=False):
+                 use_blobs=False, pack_on_populate=False):
         self.objects_per_txn = objects_per_txn
         self.object_size = object_size
         self.__random_data = []
         self.concurrency = num_workers
+        self.pack_on_populate = pack_on_populate
 
         if use_blobs:
             self.ObjectType = BlobObject
@@ -206,11 +177,39 @@ class SpeedTestData(object):
         self.read_test_read_values = accessor.read_test_read_values
         self.write_test_update_values = accessor.write_test_update_values
 
+    with open(__file__, 'rb') as _f:
+        # Just use the this module as the source of our data
+        # A list of byte words
+        _RANDOM_FILE_DATA = _f.read().replace(b'\n', b'').split()
+    del _f
+
+
+    def _random_data(self, size):
+        """
+        Create a random data of at least the given size.
+
+        Use pseudo-random data in case compression is in play so we get a more realistic
+        size and time value than a single 'x'*size would get.
+        """
+
+        def fdata():
+            words = self._RANDOM_FILE_DATA
+            chunksize = min(size, 1024)
+            while True:
+                sample = random.sample(words, len(words) // 10)
+                yield b' '.join(sample[0:chunksize])
+        datagen = fdata()
+
+        data = b''
+        while len(data) < size:
+            data += next(datagen)
+        return data
+
     def _guarantee_min_random_data(self, count):
         if len(self.__random_data) < count:
             needed = count - len(self.__random_data)
             data_size = max(0, self.object_size - pobject_base_size)
-            self.__random_data.extend([_random_data(data_size) for _ in range(needed)])
+            self.__random_data.extend([self._random_data(data_size) for _ in range(needed)])
 
     def data_to_store(self, count=None):
         # Must be fresh when accessed because could already
@@ -245,7 +244,8 @@ class SpeedTestData(object):
         # so that it can survive packs.
         transaction.commit()
         # XXX: Why are we packing here?
-        db.pack()
+        if self.pack_on_populate:
+            db.pack()
 
         # Make sure the minimum objects are present
         if self.min_object_count:
@@ -281,8 +281,15 @@ class SpeedTestData(object):
         logger.debug('Populated storage.')
 
 
+def _inner_loops(f):
+    # When a function is accessed, record that it does
+    # inner loops
+    f.inner_loops = True
+    return f
+
 class SpeedTestWorker(object):
     worker_number = 0
+    inner_loops = 10
 
     def __init__(self, worker_number, data):
         self.data = data
@@ -360,23 +367,37 @@ class SpeedTestWorker(object):
                 len(data) if data is not None else None,
             ))
 
+    # Important: If you haven't done anything to join to a
+    # transaction, don't even bother aborting/committing --- we're not
+    # generally trying to measure the synchronizer behaviour that can
+    # happen at transaction boundaries. (Differences in RelStorage
+    # drivers can show up there, which is mightily confusing on what's
+    # supposed to be a simple CPU bound loop --- this can be up to an
+    # order of magnitude, especially with cooperative multitasking.)
+
+    @_inner_loops
     def bench_add(self, loops, db_factory):
         db = db_factory()
-        begin = perf_counter()
+        duration = 0
+
         conn = db.open()
         root = conn.root()
 
         for _ in range(loops):
             m = self.data.data_for_worker(root, self)
-            m.update(self.data_to_store())
-            transaction.commit()
-
-        end = perf_counter()
+            for _ in range(self.inner_loops):
+                begin = perf_counter()
+                m.update(self.data_to_store())
+                transaction.commit()
+                end = perf_counter()
+                duration += (end - begin)
+                self.sync('add loop')
         conn.close()
         db.close()
-        duration = end - begin
+
         return duration
 
+    @_inner_loops
     def bench_update(self, loops, db_factory):
         db = db_factory()
         begin = perf_counter()
@@ -385,12 +406,13 @@ class SpeedTestWorker(object):
         got = 0
         for _ in range(loops):
             m = self.data.data_for_worker(root, self)
-            got += self.data.write_test_update_values(itervalues(m))
-            transaction.commit()
+            for _ in range(self.inner_loops):
+                got += self.data.write_test_update_values(itervalues(m))
+                transaction.commit()
         end = perf_counter()
 
         conn.close()
-        self.__check_access_count(got, loops)
+        self.__check_access_count(got, loops * self.inner_loops)
         db.close()
         duration = end - begin
         return duration
@@ -431,6 +453,7 @@ class SpeedTestWorker(object):
         self.__check_access_count(got, loops)
         return duration
 
+    @_inner_loops
     def bench_cold_read(self, loops, db_factory):
         # Because each of these is run in its own process, if we're
         # run first, then any in-memory cache is already as cold as
@@ -444,35 +467,28 @@ class SpeedTestWorker(object):
         duration = 0
         got = 0
         for _ in range(loops):
-            db = db_factory()
-            begin = perf_counter()
-            conn = db.open()
-            root = conn.root()
+            for _ in range(self.inner_loops):
+                db = db_factory()
+                begin = perf_counter()
+                conn = db.open()
+                root = conn.root()
 
-            m = self.data.data_for_worker(root, self)
-            got += self.data.read_test_read_values(itervalues(m))
-            transaction.commit()
-            end = perf_counter()
-            duration += (end - begin)
+                m = self.data.data_for_worker(root, self)
+                got += self.data.read_test_read_values(itervalues(m))
+                end = perf_counter()
+                duration += (end - begin)
 
-            self.__conn_did_load_objects(conn, data=m)
-            conn.close()
+                self.__conn_did_load_objects(conn, data=m)
+                conn.close()
 
-            self._clear_all_caches(db)
-            db.close()
-            gc.collect()
+                self._clear_all_caches(db)
+                db.close()
 
-        self.__check_access_count(got, loops)
+        self.__check_access_count(got, loops * self.inner_loops)
 
         return duration
 
     def __prime_caches(self, db):
-        # Explicitly set the number of cached objects so we're
-        # using the storage in an understandable way.
-        # Set to double the number of objects we should have created
-        # to account for btree nodes.
-        db.setCacheSize(self.objects_per_txn * 3)
-
         conn = db.open()
         root = conn.root()
         m = self.data.data_for_worker(root, self)
@@ -482,6 +498,7 @@ class SpeedTestWorker(object):
         conn.getTransferCounts(True)
         return conn, root
 
+    @_inner_loops
     def bench_steamin_read(self, loops, db_factory):
         db = db_factory()
 
@@ -492,13 +509,18 @@ class SpeedTestWorker(object):
         # and in the storage cache, if any
         got = 0
         m = self.data.data_for_worker(root, self)
+        # syncing here, before actually beginning our loops, ensures
+        # that no client gets into a CPU intensive loop while other
+        # clients have yielded to the network. This matters for
+        # cooperative multi-tasking (gevent).
+        self.sync('begin steamin')
         begin = perf_counter()
         for _ in range(loops):
-            got += self.data.read_test_read_values(itervalues(m))
-            transaction.abort()
+            for _ in range(self.inner_loops):
+                got += self.data.read_test_read_values(itervalues(m))
         end = perf_counter()
 
-        self.__check_access_count(got, loops)
+        self.__check_access_count(got, loops * self.inner_loops)
         self.__conn_did_not_load(conn)
 
         conn.close()
@@ -515,12 +537,13 @@ class SpeedTestWorker(object):
 
         duration = 0
         got = 0
-        for _ in range(loops):
+        for i in range(loops):
             conn.cacheMinimize()
+            # As for 'steamin'
+            self.sync('begin hot ' + str(i))
             m = self.data.data_for_worker(root, self)
             begin = perf_counter()
             got += self.data.read_test_read_values(itervalues(m))
-            transaction.abort()
             end = perf_counter()
             duration += (end - begin)
 

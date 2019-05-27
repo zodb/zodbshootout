@@ -19,13 +19,24 @@ from __future__ import print_function, absolute_import
 import argparse
 import sys
 
-from pyperf import Runner
+
 
 from ._pobject import pobject_base_size
 
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+
+    env_options = ['--inherit-environ', 'GEVENT_LOOP,GEVENT_RESOLVER']
+    argv.extend(env_options)
+
+    # Do the gevent stuff ASAP
+    # BEFORE other imports..and make sure we use "threads".
+    # Because with MP, we use MP.Queue which would hang if we
+    # monkey-patched the parent
+    if '--gevent' in argv:
+        import gevent.monkey
+        gevent.monkey.patch_all(Event=True)
 
     def worker_args(cmd, args):
         # Sadly, we have to manually put arguments that mean something to children
@@ -45,10 +56,13 @@ def main(argv=None):
             cmd.extend(("--threads", args.threads))
         if args.gevent:
             cmd.extend(("--gevent",))
-
+        if args.profile_dir:
+            cmd.extend(("--profile", args.profile_dir))
+        cmd.extend(env_options)
         cmd.append(args.config_file.name)
 
-
+    # pyperf uses subprocess,s make sure it's gevent patched too.
+    from pyperf import Runner
     runner = Runner(add_cmdline_args=worker_args)
     parser = runner.argparser
     prof_group = parser.add_argument_group("Profiling", "Control over profiling the database")
@@ -128,10 +142,10 @@ def main(argv=None):
 
     # Profiling
 
-    # prof_group.add_argument(
-    #     "-p", "--profile", dest="profile_dir", default="",
-    #     help="Profile all tests and output results to the specified directory",
-    # )
+    prof_group.add_argument(
+        "--profile", dest="profile_dir", default="",
+        help="Profile all tests and output results to the specified directory",
+    )
 
     # prof_group.add_argument(
     #     "-l", "--leaks", dest='leaks', action='store_true', default=False,
@@ -141,7 +155,7 @@ def main(argv=None):
     parser.add_argument("config_file", type=argparse.FileType())
 
     options = runner.parse_args(argv)
-    options.profile_dir = None
+
     #import os
     #print("In pid", os.getpid(), "Is worker?", options.worker)
     # Do the gevent stuff ASAP
