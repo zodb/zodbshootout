@@ -24,6 +24,8 @@ import os
 from io import StringIO
 
 from pyperf import perf_counter
+from pyperf import Benchmark
+from pyperf import BenchmarkSuite
 
 from .speedtest import SpeedTestData
 from .speedtest import SpeedTestWorker
@@ -230,7 +232,8 @@ def run_with_options(runner, options):
             'gevent': options.gevent,
             'threads': options.threads,
             'btrees': options.btrees,
-            'concurrency': concurrency
+            'concurrency': concurrency,
+            'objects_per_txn': objects_per_txn,
         }
         # TODO: Include the gevent loop implementation in the metadata.
 
@@ -238,6 +241,7 @@ def run_with_options(runner, options):
             # I'm the master process.
             data.populate(db_factory)
 
+        db_benchmarks = {}
         # TODO: Where to include leak prints?
         for bench_descr, bench_func, bench_opt_name in (
                 ('%s: add %s objects', speedtest.bench_add, 'add'),
@@ -258,14 +262,32 @@ def run_with_options(runner, options):
             # The decision on how to account for concurrency (whether to treat
             # that as part of the inner loop and thus divide total times by it)
             # depends on the runtime behaviour. See DistributedFunction for details.
-            runner.bench_time_func(
+            benchmark = runner.bench_time_func(
                 bench_name,
                 bench_func,
                 db_factory,
                 inner_loops=inner_loops,
                 metadata=metadata,
             )
+            db_benchmarks[bench_opt_name] = benchmark
 
+        if not options.worker and options.output:
+            # Master is going to try to write out to json
+            dir_name = os.path.splitext(options.output)[0] + '.d'
+            if not os.path.exists(dir_name):
+                os.makedirs(dir_name)
+            # We're going to update the metadata, so we need to make
+            # a copy.
+            # Use the short name so that even runs across different object
+            # counts are comparable.
+            for name, benchmark in list(db_benchmarks.items()):
+                benchmark = Benchmark(benchmark.get_runs())
+                benchmark.update_metadata({'name': name})
+                db_benchmarks[name] = benchmark
+            suite = BenchmarkSuite(db_benchmarks.values())
+
+            fname = os.path.join(dir_name, db_name + '_' + str(objects_per_txn) + '.json')
+            suite.dump(fname, replace=True)
 
 class DistributedFunction(object):
     options = None
@@ -323,6 +345,10 @@ class DistributedFunction(object):
         # so on. If scheduling is fair or FIFO, by the time the first
         # task runs again, 10ms will already have elapsed; by the time
         # it finishes, 100ms will have elapsed).
+
+        # TODO: Would it make sense to keep these numbers and find
+        # some way to add them to the pyperf Run that winds up being
+        # computed from this?
 
         actual_duration = end - begin
         recorded_duration = sum(times)
