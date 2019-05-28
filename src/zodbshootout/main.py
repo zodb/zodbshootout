@@ -19,16 +19,19 @@ from __future__ import print_function, absolute_import
 import argparse
 import sys
 
-
-
 from ._pobject import pobject_base_size
 
-def main(argv=None):
+class ZapAction(argparse.Action):
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if values == 'force':
+            setattr(namespace, self.dest, 'force')
+        else:
+            setattr(namespace, self.dest, True)
+
+def main(argv=None): # pylint:disable=too-many-statements
     if argv is None:
         argv = sys.argv[1:]
-
-    env_options = ['--inherit-environ', 'GEVENT_LOOP,GEVENT_RESOLVER']
-    argv.extend(env_options)
 
     # Do the gevent stuff ASAP
     # BEFORE other imports..and make sure we use "threads".
@@ -38,12 +41,19 @@ def main(argv=None):
         import gevent.monkey
         gevent.monkey.patch_all(Event=True)
 
+    import os
+    env_options = ['--inherit-environ',
+                   ','.join([k for k in os.environ
+                             if k.startswith('GEVENT') or k.startswith('PYTHON')])]
+    argv.extend(env_options)
+
+
     def worker_args(cmd, args):
         # Sadly, we have to manually put arguments that mean something to children
         # back on. There's no easy 'unparse' we can use. Some of the options for
         # pyperf, if we duplicate in the children, lead to errors (such as -o)
         if args.counts:
-            cmd.extend(('--object-counts', str(args.counts[0])))
+            cmd.extend(('--object-counts', str(args.counts)))
         if args.object_size:
             cmd.extend(('--object-size', str(args.object_size)))
         if args.btrees:
@@ -51,15 +61,20 @@ def main(argv=None):
         if args.use_blobs:
             cmd.extend(("--blobs",))
         if args.concurrency:
-            cmd.extend(("--concurrency", str(args.concurrency[0])))
+            cmd.extend(("--concurrency", str(args.concurrency)))
         if args.threads:
             cmd.extend(("--threads", args.threads))
         if args.gevent:
             cmd.extend(("--gevent",))
         if args.profile_dir:
             cmd.extend(("--profile", args.profile_dir))
+        if not args.include_mapping:
+            cmd.extend(('--include-mapping', "false"))
+        if args.log:
+            cmd.extend(('--log', options.log))
         cmd.extend(env_options)
         cmd.append(args.config_file.name)
+        cmd.extend(args.benchmarks)
 
     # pyperf uses subprocess,s make sure it's gevent patched too.
     from pyperf import Runner
@@ -68,7 +83,6 @@ def main(argv=None):
     prof_group = parser.add_argument_group("Profiling", "Control over profiling the database")
     obj_group = parser.add_argument_group("Objects", "Control the objects put in ZODB")
     con_group = parser.add_argument_group("Concurrency", "Control over concurrency")
-    rep_group = parser.add_argument_group("Repetitions", "Control over test repetitions")
     out_group = parser.add_argument_group("Output", "Control over the output")
 
     # Objects
@@ -76,14 +90,14 @@ def main(argv=None):
         "--object-counts", dest="counts",
         type=int,
         nargs="?",
-        default=[],
-        action="append",
-        help="Object counts to use (default 1000).",
+        default=1000,
+        action="store",
+        help="Object counts to use (default %(default)d).",
     )
     obj_group.add_argument(
         "-s", "--object-size", dest="object_size", default=pobject_base_size,
         type=int,
-        help="Size of each object in bytes (estimated, default approx. %d)" % pobject_base_size,
+        help="Size of each object in bytes (estimated, default approx. %(default)d)"
     )
     obj_group.add_argument(
         "--btrees", nargs="?", const="IO", default=False,
@@ -92,7 +106,9 @@ def main(argv=None):
         " Specifying --btrees by itself will use an IO BTree; not specifying it will use PersistentMapping."
     )
     obj_group.add_argument(
-        "--zap", action='store_true', default=False,
+        "--zap", action=ZapAction,
+        default=False,
+        nargs='?',
         help="Zap the entire RelStorage before running tests. This will destroy all data. "
     )
     obj_group.add_argument(
@@ -109,10 +125,10 @@ def main(argv=None):
     con_group.add_argument(
         "-c", "--concurrency", dest="concurrency",
         type=int,
-        default=[],
-        action="append",
+        default=2,
+        action="store",
         nargs="?",
-        help="Concurrency level to use. Default is 2."
+        help="Concurrency level to use. Default is %(default)d."
     )
     con_group.add_argument(
         "--threads", const="shared", default=False, nargs="?",
@@ -147,13 +163,24 @@ def main(argv=None):
         help="Profile all tests and output results to the specified directory",
     )
 
+    prof_group.add_argument(
+        "--include-mapping", dest='include_mapping', default=True,
+        type=lambda s: s.lower() in ('true', 'yes', 'on'),
+        nargs='?',
+        help="Benchmark a MappingStorage. This serves as a floor."
+        "Default is true; use any value besides 'true', 'yes' or 'on' "
+        "to disable."
+    )
     # prof_group.add_argument(
     #     "-l", "--leaks", dest='leaks', action='store_true', default=False,
     #     help="Check for object leaks after every repetition. This only makes sense with --threads"
     # )
 
     parser.add_argument("config_file", type=argparse.FileType())
-
+    parser.add_argument('benchmarks',
+                        nargs='*',
+                        default='all',
+                        choices=['add', 'update', 'warm', 'cold', 'hot', 'steamin', 'all'])
     options = runner.parse_args(argv)
 
     #import os
@@ -168,6 +195,14 @@ def main(argv=None):
         if not options.threads:
             options.threads = 'shared'
 
+    if 'all' in options.benchmarks or options.benchmarks == 'all':
+        options.benchmarks = ['all']
+
+    if options.log:
+        import logging
+        lvl_map = getattr(logging, '_nameToLevel', None) or getattr(logging, '_levelNames', {})
+        logging.basicConfig(level=lvl_map.get(options.log, logging.INFO),
+                            format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
 
     from ._runner import run_with_options
     run_with_options(runner, options)

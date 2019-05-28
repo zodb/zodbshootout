@@ -20,15 +20,25 @@ from multiprocessing import Process as MPProcess
 from multiprocessing import Queue as MPQueue
 
 from threading import Thread as MTProcess
+from threading import Lock as MTLock
+from threading import Event as MTEvent
 from six.moves.queue import Queue as MTQueue
 
+gevent_threads = False
 try:
     import gevent.monkey
 except ImportError:
     pass
 else:
     if gevent.monkey.is_module_patched('threading'):
+        # pylint:disable=function-redefined
+        gevent_threads = True
         from gevent.queue import Queue as MTQueue
+        from gevent.event import Event as MTEvent
+        class MTLock(object):
+            def acquire(self):
+                pass
+            release = acquire
 
 from six.moves.queue import Empty
 import time
@@ -144,7 +154,6 @@ class Child(object):
             # gevent, it lets the loop cycle.
             time.sleep(0.0001)
 
-
     def __str__(self):
         return "Child(%s)" % (self.child_num,)
 
@@ -159,8 +168,50 @@ class SynclessChild(Child):
     def _execute_func(self):
         return self.func(*self._args, **self._kwargs)
 
-    def sync(self):
+    def sync(self, name):
         raise NotImplementedError()
+
+
+class ThreadedChild(Child):
+    """
+    A child object that uses fast thread synchronization.
+    """
+
+    event_lock = None
+    events = None
+    child_count = None
+
+    def herd_init(self, event_lock, events, child_count):
+        self.event_lock = event_lock
+        self.events = events
+        self.child_count = child_count
+
+    def sync(self, name):
+        # In gevent, we don't actually take a lock here. So this
+        # method MUST NOT do anything that could cause a greenlet switch
+        # until we're ready.
+        self.event_lock.acquire()
+        event, count = self.events.get(name, (None, None))
+        if event is None:
+            # I'm the first one here!
+            event = MTEvent()
+            count = 0
+
+        count += 1
+        self.events[name] = (event, count)
+        assert len(self.events) == 1, (name, self.events)
+        if count < self.child_count:
+            self.event_lock.release()
+            event.wait()
+        else:
+            # I'm the last one here! Wake everybody else up.
+            del self.events[name]
+            assert not self.events, (name, self.events)
+            event.set()
+            self.event_lock.release()
+            # I'm going to keep going by returning from this function.
+            # Next time I sleep others will wake up.
+
 
 def _poll_children(parent_queue, children, before_poll=lambda: None):
 
@@ -180,7 +231,7 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
         while children:
 
             try:
-                child_num, msg, arg = parent_queue.get(timeout=1)
+                child_num, msg, arg = parent_queue.get(timeout=10)
             except Empty:
                 # If we're running with gevent patches, but the driver isn't
                 # cooperative, we may have timed out before the switch. But there may be
@@ -268,8 +319,19 @@ def distribute(func, param_iter, strategy='mp',
 
     children = {}
     parent_queue = Queue()
+
+    events = {}
+    lock = MTLock()
+
+    if strategy == 'threads':
+        child_factory = ThreadedChild
+
     for child_num, param in enumerate(param_iter):
-        child = Child(child_num, parent_queue, func, param, Process, Queue)
+        child = child_factory(child_num, parent_queue, func, param, Process, Queue)
         children[child_num] = child
+
+    if child_factory is ThreadedChild:
+        for child in children.values():
+            child.herd_init(lock, events, len(children))
 
     return _poll_children(parent_queue, children, before_poll)

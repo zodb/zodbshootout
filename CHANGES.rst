@@ -5,6 +5,29 @@
 0.7.0 (unreleased)
 ==================
 
+- The timing loops have been rewritten on top of `pyperf
+  <https://pyperf.readthedocs.io/en/latest/index.html>`_. This
+  produces much more reliable/stable, meaningful data with a richer set of
+  statistics information captured, and the ability to do analysis and
+  comparisons on data files captured after a run is complete. Some
+  command line options have changed as a result of this, and the
+  output no longer is in terms of "objects per second" but how long a
+  particular loop operation takes. See :issue:`37` and :issue:`35`.
+- The timing data for in-process concurrency (gevent and threads)
+  attempts to take the concurrency into account to produce more
+  accurate results. See :issue:`38`.
+- Add debug logging when we think we detect gevent-cooperative and
+  gevent-unaware databases in gevent mode.
+- Add the ability to specify only certain subsets of benchmarks to run
+  on the command line. (You must always run at least the 'add'
+  benchmark.)
+- The benchmarks more carefully verify that they tested what they
+  wanted to. For example, they check that their Connection's load count
+  matches what it should be (0 in the case of the "steamin" test).
+- Profiling in gevent mode captures the entire set of data in a single
+  file. See :issue:`33`.
+- The ``--zap`` option accepts a ``force`` argument to eliminate the
+  prompts. See :issue:`36`.
 - Multi-threaded runs handle exceptions and signals more reliably.
   Partial fix for :issue:`26`.
 - Shared thread read tests clear the caches of connections and the

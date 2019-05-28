@@ -391,7 +391,8 @@ class SpeedTestWorker(object):
                 transaction.commit()
                 end = perf_counter()
                 duration += (end - begin)
-                self.sync('add loop')
+                # XXX: Why would we sync here? That really slows us down
+                # self.sync('add loop')
         conn.close()
         db.close()
 

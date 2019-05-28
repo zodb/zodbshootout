@@ -20,38 +20,24 @@ interpreter lock.
 """
 from __future__ import print_function, absolute_import
 
-
+import os
 from io import StringIO
+
+from pyperf import perf_counter
 
 from .speedtest import SpeedTestData
 from .speedtest import SpeedTestWorker
 from .speedtest import pobject_base_size
 
-import os
 from six import PY3
 
 import ZConfig
 
-try:
-    from itertools import zip
-except ImportError:
-    zip = zip
-
-def itervalues(d):
-    try:
-        iv = d.itervalues
-    except AttributeError:
-        iv = d.values
-    return iv()
 
 if PY3:
     ask = input
 else:
     ask = raw_input # pylint:disable=undefined-variable
-
-DEFAULT_MAX_ATTEMPTS = 20
-DEFAULT_OBJ_COUNTS = (1000,)
-DEFAULT_CONCURRENCIES = (2,)
 
 schema_xml = u"""
 <schema>
@@ -59,6 +45,8 @@ schema_xml = u"""
   <multisection type="ZODB.database" name="*" attribute="databases" />
 </schema>
 """
+
+logger = __import__('logging').getLogger(__name__)
 
 def _make_leak_check(options):
     if not options.leaks:
@@ -87,12 +75,15 @@ def _make_leak_check(options):
 
     return prep_leaks, show_leaks
 
-def _zap(contenders):
+def _zap(contenders, force=False):
     for db_name, db in contenders:
         db = db.open()
         if hasattr(db.storage, 'zap_all'):
-            prompt = "Really destroy all data in %s? [yN] " % db_name
-            resp = ask(prompt)
+            if force:
+                resp = 'y'
+            else:
+                prompt = "Really destroy all data in %s? [yN] " % db_name
+                resp = ask(prompt)
             if resp in 'yY':
                 db.storage.zap_all()
         db.close()
@@ -105,6 +96,9 @@ class _CacheAndConnSettingFactory(object):
         self.objects_per_txn = objects_per_txn
         self.concurrency = concurrency
 
+    def __getattr__(self, name):
+        return getattr(self.factory, name)
+
     def open(self):
         db = self.factory.open()
         # Explicitly set the number of cached objects so we're
@@ -115,6 +109,42 @@ class _CacheAndConnSettingFactory(object):
         # Prevent warnings about large concurrent shared databases.
         db.setPoolSize(self.concurrency)
         return db
+
+    def __call__(self):
+        return self.open()
+
+    def __repr__(self):
+        return "CAC(%s)" % (self.name,)
+
+
+class _MappingFactory(object):
+
+    name = 'MappingStorage'
+
+    def __init__(self, concurrency, data):
+        self.concurrency = concurrency
+        self.data = data
+
+    def open(self):
+        from ZODB import DB
+        from ZODB.MappingStorage import MappingStorage
+
+        db = DB(MappingStorage())
+        import transaction
+        db.close = lambda: None
+        self.data.populate(lambda: db)
+        del db.close
+        mconn = db.open()
+        mroot = mconn.root()
+        for worker in range(self.concurrency):
+            mroot['speedtest'][worker].update(self.data.data_to_store())
+        transaction.commit()
+        mconn.cacheMinimize()
+        mconn.close()
+        return db
+
+    def __call__(self):
+        return self.open()
 
 def run_with_options(runner, options):
     conf_fn = options.config_file
@@ -127,14 +157,15 @@ def run_with_options(runner, options):
         if not gevent.monkey.is_module_patched('threading'):
             raise AssertionError("gevent monkey-patching should have happened")
 
-
-    if options.log:
-        import logging
-        lvl_map = getattr(logging, '_nameToLevel', None) or getattr(logging, '_levelNames', {})
-        logging.basicConfig(level=lvl_map.get(options.log, logging.INFO),
-                            format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
-    objects_per_txn = options.counts[0] if options.counts else DEFAULT_OBJ_COUNTS[0]
-    concurrency = options.concurrency[0] if options.concurrency else DEFAULT_CONCURRENCIES[0]
+    objects_per_txn = options.counts
+    # XXX: Note this in the docs: If concurrency is high, and
+    # objects_per_txn is low, especially if you're using threads or
+    # gevent, you can spend all your time polling for numbers from
+    # children, and not actually making much forward progress. This
+    # shows up as the CPU usage being relatively low, and the sample
+    # showing all the time spent in libev/libuv. An in-memory database like the
+    # mapping database shows this best.
+    concurrency = options.concurrency
     object_size = max(options.object_size, pobject_base_size)
     if options.profile_dir and not os.path.exists(options.profile_dir):
         os.makedirs(options.profile_dir)
@@ -145,7 +176,7 @@ def run_with_options(runner, options):
                   for db in config.databases]
 
     if options.zap:
-        _zap(contenders)
+        _zap(contenders, force=options.zap == 'force')
 
     data = SpeedTestData(concurrency, objects_per_txn, object_size)
     data.min_object_count = data.min_object_count
@@ -156,40 +187,26 @@ def run_with_options(runner, options):
         else:
             data.MappingType = BTrees.family64.OO.BTree
 
-    # We always include a mapping storage as the first item
-    # as a ground floor.
-    from ZODB import DB
-    from ZODB.DemoStorage import DemoStorage
+    # We include a mapping storage as the first item
+    # as a ground floor to set expectations.
+    if options.include_mapping:
+        contenders.insert(0, ('mapping',
+                              _CacheAndConnSettingFactory(_MappingFactory(concurrency, data),
+                                                          objects_per_txn, concurrency)))
 
-    class Factory(object):
-
-        def open(self):
-            db = DB(DemoStorage())
-            import transaction
-            db.close = lambda: None
-            data.populate(lambda: db)
-            del db.close
-            mconn = db.open()
-            mroot = mconn.root()
-            for worker in range(concurrency):
-                mroot['speedtest'][worker].update(data.data_to_store())
-            transaction.commit()
-            mconn.cacheMinimize()
-            mconn.close()
-            return db
-
-    # XXX: Make this configurable too. This can be quite slow
-    # using in-process concurrency.
-    #contenders.insert(0, ('mapping', Factory()))
-
+    # For concurrency of 1, or if we're using forked concurrency, we
+    # want to take the times as reported by the benchmark functions as
+    # accurate: There is no other timer running that could interfere.
+    # For other methods, especially if we're using gevent, we may need to make adjustments;
+    # see the ThreadedRunner for details.
     if concurrency > 1:
         if options.threads == 'shared':
-            speedtest = SharedThreadedRunner(data, concurrency)
+            speedtest = SharedThreadedRunner(data, options)
         elif options.threads:
             # Unique
-            speedtest = ThreadedRunner(data, concurrency)
+            speedtest = ThreadedRunner(data, options)
         else:
-            speedtest = ForkedRunner(data, concurrency)
+            speedtest = ForkedRunner(data, options)
     else:
         speedtest = SpeedTestWorker(
             0,
@@ -202,9 +219,11 @@ def run_with_options(runner, options):
                 # This doesn't work for non-concurrent (concurrency=1) situations
                 # TODO: Make one that does.
                 # TODO: Implement this for non-gevent concurrency.
-                speedtest.Function = GeventProfiledFunctionFactory(options.profile_dir,
-                                                                   options.worker_task,
-                                                                   speedtest.Function)
+                speedtest.make_function_wrapper = GeventProfiledFunctionFactory(
+                    options.profile_dir,
+                    options.worker_task,
+                    speedtest.make_function_wrapper
+                )
 
     for db_name, db_factory in contenders:
         metadata = {
@@ -217,37 +236,53 @@ def run_with_options(runner, options):
 
         if not options.worker:
             # I'm the master process.
-            data.populate(db_factory.open)
+            data.populate(db_factory)
 
         # TODO: Where to include leak prints?
-        for bench_name, bench_func in (
-                ('%s: add %s objects', speedtest.bench_add),
-                ('%s: update %s objects', speedtest.bench_update,),
-                ('%s: read %s cold objects', speedtest.bench_cold_read,),
-                ('%s: read %s warm objects', speedtest.bench_read_after_write,),
-                ('%s: read %s hot objects', speedtest.bench_hot_read,),
-                ('%s: read %s steamin objects', speedtest.bench_steamin_read,),
+        for bench_descr, bench_func, bench_opt_name in (
+                ('%s: add %s objects', speedtest.bench_add, 'add'),
+                ('%s: update %s objects', speedtest.bench_update, 'update',),
+                ('%s: read %s cold objects', speedtest.bench_cold_read, 'cold',),
+                ('%s: read %s warm objects', speedtest.bench_read_after_write, 'warm',),
+                ('%s: read %s hot objects', speedtest.bench_hot_read, 'hot',),
+                ('%s: read %s steamin objects', speedtest.bench_steamin_read, 'steamin',),
         ):
-            bench_name = bench_name % (db_name, objects_per_txn)
+            if options.benchmarks != ['all'] and bench_opt_name not in options.benchmarks:
+                continue
+
+            bench_name = bench_descr % (db_name, objects_per_txn)
             if getattr(bench_func, 'inner_loops', None):
                 inner_loops = speedtest.inner_loops
             else:
                 inner_loops = 1
-            inner_loops *= concurrency
+            # The decision on how to account for concurrency (whether to treat
+            # that as part of the inner loop and thus divide total times by it)
+            # depends on the runtime behaviour. See DistributedFunction for details.
             runner.bench_time_func(
                 bench_name,
                 bench_func,
-                db_factory.open,
+                db_factory,
                 inner_loops=inner_loops,
                 metadata=metadata,
             )
 
 
 class DistributedFunction(object):
-    def __init__(self, mp_strategy, func_name, workers):
+    options = None
+
+    def __init__(self, runner, func_name):
+        mp_strategy = runner.mp_strategy
+        workers = runner.workers
+        self.options = runner.options
+        assert mp_strategy
+        assert func_name
         self.func_name = func_name
         self.workers = workers
         self.mp_strategy = mp_strategy
+
+    @property
+    def concurrency(self):
+        return len(self.workers)
 
     def __getattr__(self, name):
         # We're a function-like object, delegate to the function
@@ -258,7 +293,20 @@ class DistributedFunction(object):
     def __call__(self, loops, db_factory):
         from .fork import distribute
 
-        # Is averaging these really the best we can do?
+        begin = perf_counter()
+        times = distribute(self.worker,
+                           ((w, loops, db_factory) for w in self.workers),
+                           self.mp_strategy)
+        end = perf_counter()
+        if self.mp_strategy == 'mp':
+            # We used forking, there was no contention we need to account for.
+            # But we do return, not an average, but the *worst* time. This
+            # lets pyperf do the averaging and smoothing for us.
+            return max(times)
+
+
+        # We used in-process concurrency. There may be contention to
+        # account for.
 
         # If we use our own wall clock time, we include all the
         # overhead of distributing the tasks and whatever internal
@@ -266,52 +314,115 @@ class DistributedFunction(object):
         # sum (or average) of the individual concurrent runs, some
         # things might get charged more than once (especially with
         # gevent: one can start a timer, switch away to another for an
-        # unbounded amount of time while still accumulating clock time, while
-        # not even running). Maybe we want to use a greenlet tracer in that
-        # case to only count time while it's actually doing stuff?
-        times = distribute(self.worker,
-                           ((w, loops, db_factory) for w in self.workers),
-                           self.mp_strategy)
-        # print("Actual duration of", self.func_name, "is", end - begin,
-        #       "Sum is", sum(times), "avg is", sum(times) / len(self.workers),
-        #       "Real average is", (end - begin) / len(self.workers))
-        return sum(times) / len(self.workers)
+        # unbounded amount of time while still accumulating clock
+        # time, while not even running; this can also happen in
+        # threads if the driver releases the GIL frequently. Suppose
+        # you have 10 tasks, each of which does 10 things, and each
+        # thing takes 1ms, but releases the GIL; the first task runs
+        # for 1ms then releases the GIL, the second does the same, and
+        # so on. If scheduling is fair or FIFO, by the time the first
+        # task runs again, 10ms will already have elapsed; by the time
+        # it finishes, 100ms will have elapsed).
+
+        actual_duration = end - begin
+        recorded_duration = sum(times)
+        actual_average = actual_duration / self.concurrency
+        recorded_average = recorded_duration / self.concurrency
+        if recorded_duration > actual_duration:
+            # We think we took longer than we actually did. This means
+            # that there was a high level of actual concurrent operations
+            # going on, a lot of GIL switching, or gevent switching. That's a good thing!
+            # it means you have a cooperative database
+            #
+            # In that case, we want to treat the concurrency as essentially an extra
+            # 'inner_loop' for the benchmark. To do this, we find the biggest one
+            # (usually the first to start?) and divide by the concurrency.
+
+            # This "normalization" helps when comparing different
+            # types of concurrency. If you're only going to be working
+            # with one type of database (fully cooperative, fully
+            # non-cooperative), you may not want to do this normalization.
+            if self.options.gevent:
+                logger.info('(gevent-cooperative driver %s)', db_factory.name)
+            result = max(times) / self.concurrency
+        else:
+            if self.options.gevent:
+                logger.info('(gevent NON-cooperative driver %s)', db_factory.name)
+            result = max(times)
+        logger.debug(
+            "Actual duration of %s is %s. Recorded duration is %s. "
+            "Actual average is %s. Recorded average is %s. "
+            "Result: %s. Times: %s",
+            self.func_name, actual_duration, recorded_duration,
+            actual_average, recorded_average,
+            result, times
+        )
+
+        return result
 
     def worker(self, worker_loops_db_factory, sync):
+        begin = perf_counter()
         worker, loops, db_factory = worker_loops_db_factory
         worker.sync = sync
         f = getattr(worker, self.func_name)
         time = f(loops, db_factory)
+        end = perf_counter()
+        logger.debug("Worker %s ran for %s",
+                     self.func_name, end - begin)
         return time
 
 
-class ThreadedRunner(object):
-    mp_strategy = 'threads'
-    Function = DistributedFunction
+class AbstractDistributedRunner(object):
+    mp_strategy = None
+    Function = None
 
-    def __init__(self, data, concurrency):
-        self.concurrency = concurrency
-        self.workers = [SpeedTestWorker(i, data) for i in range(concurrency)]
+    def __init__(self, data, options):
+        self.options = options
+        self.concurrency = options.concurrency
+        self.workers = [SpeedTestWorker(i, data) for i in range(self.concurrency)]
 
     def __getattr__(self, name):
         if name.startswith("bench_"):
-            return self.Function(self.mp_strategy, name, self.workers)
+            wrapper = self.make_function_wrapper(self, name)
+            return wrapper
         return getattr(self.workers[0], name)
 
-class SharedDBFunction(DistributedFunction):
+    def make_function_wrapper(self, runner, func_name):
+        raise NotImplementedError
+
+
+class SharedDBFunction(object):
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
     def __call__(self, loops, db_factory):
+        orig_db_factory = db_factory
         db = db_factory()
-        db.setPoolSize(len(self.workers))
+        db.setPoolSize(self.inner.concurrency)
         close = db.close
         db.close = lambda: None
         db_factory = lambda: db
+        db_factory.name = orig_db_factory.name
         try:
-            return super(SharedDBFunction, self).__call__(loops, db_factory)
+            return self.inner(loops, db_factory)
         finally:
             close()
 
-class SharedThreadedRunner(ThreadedRunner):
-    Function = SharedDBFunction
+
+class ThreadedRunner(AbstractDistributedRunner):
+    mp_strategy = 'threads'
+    make_function_wrapper = DistributedFunction
+
+
+class SharedThreadedRunner(AbstractDistributedRunner):
+    mp_strategy = 'threads'
+
+    def make_function_wrapper(self, runner, func_name):
+        return SharedDBFunction(DistributedFunction(runner, func_name))
 
 
 class GeventProfiledFunctionFactory(object):
@@ -320,10 +431,10 @@ class GeventProfiledFunctionFactory(object):
         self.inner = inner
         self.worker = worker
 
-    def __call__(self, mp_strategy, func_name, workers):
+    def __call__(self, *args):
         return GeventProfiledFunction(self.profile_dir,
                                       self.inner,
-                                      mp_strategy, func_name, workers)
+                                      *args)
 
 class GeventProfiledFunction(object):
     """
@@ -334,9 +445,9 @@ class GeventProfiledFunction(object):
     where real threads are not actually in use.
     """
 
-    def __init__(self, profile_dir, inner, mp_strategy, func_name, workers):
+    def __init__(self, profile_dir, inner, runner, func_name):
         self.profile_dir = profile_dir
-        self.inner = inner(mp_strategy, func_name, workers)
+        self.inner = inner(runner, func_name)
         import cProfile
         self.profiler = cProfile.Profile()
 
@@ -365,6 +476,7 @@ class GeventProfiledFunction(object):
                 st.strip_dirs()
                 st.sort_stats('cumulative')
                 st.print_stats()
+
 
 class ForkedRunner(ThreadedRunner):
     mp_strategy = 'mp'
