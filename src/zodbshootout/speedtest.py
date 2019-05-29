@@ -307,6 +307,11 @@ class SpeedTestWorker(object):
         # know you need to really sync up to prevent interference.
         pass
 
+    def should_clear_all_caches(self):
+        # By default, only the master should do that.
+        # But MP tasks will do different.
+        return self.worker_number == 0
+
     def _clear_all_caches(self, db):
         # Clear all caches, returns how long that took.
         # No connection should be open when this is called.
@@ -327,7 +332,11 @@ class SpeedTestWorker(object):
         # successive greenlet waits longer and longer before starting
         # the test.
         self.sync('before clear')
-        if self.worker_number == 0:
+        if self.should_clear_all_caches():
+            db.speedtest_log_cache_stats("Clearing all caches in worker %s" % (
+                self.worker_number,
+            ))
+
             db.pool.map(lambda c: c.cacheMinimize())
             # In ZODB 5, db.storage is the storage object passed to the DB object.
             # If it doesn't implement IMVCCStorage, then an adapter is wrapped
@@ -336,7 +345,6 @@ class SpeedTestWorker(object):
             # Both of them have a `_cache` that needs cleared. We do not need to open a
             # connection for this to happen. The cache is shared among all connections
             # in both cases.
-
             if hasattr(db.storage, '_cache'):
                 db.storage._cache.clear()
 
@@ -431,9 +439,8 @@ class SpeedTestWorker(object):
 
         duration = 0
         got = 0
-        for _ in range(loops):
+        for i in range(loops):
             db = db_factory()
-            db.setCacheSize(self.objects_per_txn * 3)
 
             begin = perf_counter()
             conn = db.open()
@@ -448,7 +455,10 @@ class SpeedTestWorker(object):
             duration += (end - begin)
 
             conn.close()
-            self._clear_all_caches(db)
+            # See bench_cold_read for why we don't clear at the end.
+            is_last_loop = (i == loops - 1)
+            if not is_last_loop:
+                self._clear_all_caches(db)
             db.close()
 
         self.__check_access_count(got, loops)
@@ -467,23 +477,27 @@ class SpeedTestWorker(object):
         # clear caches.)
         duration = 0
         got = 0
-        for _ in range(loops):
-            for _ in range(self.inner_loops):
-                db = db_factory()
-                begin = perf_counter()
-                conn = db.open()
-                root = conn.root()
+        total_loops = loops * self.inner_loops
+        for i in range(total_loops):
+            db = db_factory()
+            begin = perf_counter()
+            conn = db.open()
+            root = conn.root()
+            m = self.data.data_for_worker(root, self)
+            got += self.data.read_test_read_values(itervalues(m))
+            end = perf_counter()
+            duration += (end - begin)
 
-                m = self.data.data_for_worker(root, self)
-                got += self.data.read_test_read_values(itervalues(m))
-                end = perf_counter()
-                duration += (end - begin)
-
-                self.__conn_did_load_objects(conn, data=m)
-                conn.close()
-
+            self.__conn_did_load_objects(conn, data=m)
+            conn.close()
+            # RelStorage likes to write its cache on close, so to get the best
+            # persistent cache, we want to clear up front, or at least be sure
+            # not to clear before we return.
+            is_last_loop = (i == total_loops - 1)
+            if not is_last_loop:
                 self._clear_all_caches(db)
-                db.close()
+
+            db.close()
 
         self.__check_access_count(got, loops * self.inner_loops)
 
@@ -507,7 +521,10 @@ class SpeedTestWorker(object):
         conn, root = self.__prime_caches(db)
 
         # All the objects should now be cached locally, in the pickle cache
-        # and in the storage cache, if any
+        # and in the storage cache, if any. We won't need to load anything
+        # from the storage, all the objects are already unghosted.
+        # This serves as a test of iteration speed and the basic `persistence`
+        # machinery.
         got = 0
         m = self.data.data_for_worker(root, self)
         # syncing here, before actually beginning our loops, ensures
@@ -539,8 +556,12 @@ class SpeedTestWorker(object):
         duration = 0
         got = 0
         for i in range(loops):
+            # Clear the pickle cache of unghosted objects; they'll
+            # all have to be reloaded. (We don't directly check the pickle
+            # cache length here, but we do verify that the connection has loaded
+            # objects_per_txn * loops below.)
             conn.cacheMinimize()
-            # As for 'steamin'
+            # As for 'steamin', sync before looping.
             self.sync('begin hot ' + str(i))
             m = self.data.data_for_worker(root, self)
             begin = perf_counter()

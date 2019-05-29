@@ -19,8 +19,10 @@
 - Add debug logging when we think we detect gevent-cooperative and
   gevent-unaware databases in gevent mode.
 - Add the ability to specify only certain subsets of benchmarks to run
-  on the command line. (You must always run at least the 'add'
-  benchmark.)
+  on the command line. In particular, if you've already run the
+  ``add`` benchmark once, you can run other benchmarks such as the
+  ``cold`` benchmark again independently as many times as you want (as
+  long as you don't ``zap`` the database; that's not allowed).
 - The benchmarks more carefully verify that they tested what they
   wanted to. For example, they check that their Connection's load count
   matches what it should be (0 in the case of the "steamin" test).

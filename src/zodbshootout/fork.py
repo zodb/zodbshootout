@@ -160,16 +160,8 @@ class Child(object):
 
 class SynclessChild(Child):
 
-    def __init__(self, parent_queue, func, Process, args, kwargs):
-        Child.__init__(self, 0, parent_queue, func, None, Process, lambda: None)
-        self._args = args
-        self._kwargs = kwargs
-
-    def _execute_func(self):
-        return self.func(*self._args, **self._kwargs)
-
     def sync(self, name):
-        raise NotImplementedError()
+        pass
 
 
 class ThreadedChild(Child):
@@ -323,8 +315,14 @@ def distribute(func, param_iter, strategy='mp',
     events = {}
     lock = MTLock()
 
+    child_factory = Child
     if strategy == 'threads':
         child_factory = ThreadedChild
+    else:
+        # MP is no longer needing to sync because
+        # we don't do phases at the child level anymore, it's
+        # higher.
+        child_factory = SynclessChild
 
     for child_num, param in enumerate(param_iter):
         child = child_factory(child_num, parent_queue, func, param, Process, Queue)

@@ -22,6 +22,8 @@ from __future__ import print_function, absolute_import
 
 import os
 from io import StringIO
+import pprint
+import threading
 
 from pyperf import perf_counter
 from pyperf import Benchmark
@@ -110,7 +112,23 @@ class _CacheAndConnSettingFactory(object):
         db.setCacheSize(self.objects_per_txn * 3)
         # Prevent warnings about large concurrent shared databases.
         db.setPoolSize(self.concurrency)
+        db.speedtest_log_cache_stats = lambda msg='': self._log_cache_stats(db, msg)
         return db
+
+    def _log_cache_stats(self, db, msg=''):
+        storage = db.storage
+        cache = getattr(storage, '_cache', None)
+        stats = getattr(cache, 'stats', lambda: {})()
+        if stats:
+            # TODO: Get these recorded in metadata for the benchmark that just ran
+            logger.info(
+                "Cache hit stats for %s (%s): Hits: %s Misses: %s Ratio: %s Stores: %s",
+                self.name, msg,
+                stats.get('hits'), stats.get('misses'), stats.get('ratio'), stats.get('sets')
+            )
+        else:
+            logger.debug("No storage cache found for %s (%s)",
+                         self.name, msg)
 
     def __call__(self):
         return self.open()
@@ -177,7 +195,12 @@ def run_with_options(runner, options):
     contenders = [(db.name, _CacheAndConnSettingFactory(db, objects_per_txn, concurrency))
                   for db in config.databases]
 
+    def will_run_add():
+        return options.benchmarks == ['all'] or 'add' in options.benchmarks
+
     if options.zap:
+        if not will_run_add():
+            raise Exception("Cannot zap if you're not adding")
         _zap(contenders, force=options.zap == 'force')
 
     data = SpeedTestData(concurrency, objects_per_txn, object_size)
@@ -237,8 +260,9 @@ def run_with_options(runner, options):
         }
         # TODO: Include the gevent loop implementation in the metadata.
 
-        if not options.worker:
-            # I'm the master process.
+        if not options.worker and will_run_add():
+            # I'm the master process. Only do this (which resets everything)
+            # if we're going to run the add benchmark.
             data.populate(db_factory)
 
         db_benchmarks = {}
@@ -387,9 +411,13 @@ class DistributedFunction(object):
         return result
 
     def worker(self, worker_loops_db_factory, sync):
-        begin = perf_counter()
         worker, loops, db_factory = worker_loops_db_factory
         worker.sync = sync
+
+        thread = threading.current_thread()
+        thread.name = "%s-%s-%s" % (self.func_name, db_factory.name, worker.worker_number)
+
+        begin = perf_counter()
         f = getattr(worker, self.func_name)
         time = f(loops, db_factory)
         end = perf_counter()
@@ -401,11 +429,12 @@ class DistributedFunction(object):
 class AbstractDistributedRunner(object):
     mp_strategy = None
     Function = None
+    WorkerClass = SpeedTestWorker
 
     def __init__(self, data, options):
         self.options = options
         self.concurrency = options.concurrency
-        self.workers = [SpeedTestWorker(i, data) for i in range(self.concurrency)]
+        self.workers = [self.WorkerClass(i, data) for i in range(self.concurrency)]
 
     def __getattr__(self, name):
         if name.startswith("bench_"):
@@ -504,5 +533,11 @@ class GeventProfiledFunction(object):
                 st.print_stats()
 
 
+class ForkedWorker(SpeedTestWorker):
+
+    def should_clear_all_caches(self):
+        return True
+
 class ForkedRunner(ThreadedRunner):
     mp_strategy = 'mp'
+    WorkerClass = ForkedWorker
