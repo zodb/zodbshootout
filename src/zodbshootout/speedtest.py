@@ -331,6 +331,7 @@ class SpeedTestWorker(object):
         # storage cache and then moves on with the test. Each
         # successive greenlet waits longer and longer before starting
         # the test.
+        begin = perf_counter()
         self.sync('before clear')
         if self.should_clear_all_caches():
             db.speedtest_log_cache_stats("Clearing all caches in worker %s" % (
@@ -345,6 +346,7 @@ class SpeedTestWorker(object):
             # Both of them have a `_cache` that needs cleared. We do not need to open a
             # connection for this to happen. The cache is shared among all connections
             # in both cases.
+            before_clear = perf_counter()
             if hasattr(db.storage, '_cache'):
                 db.storage._cache.clear()
 
@@ -352,7 +354,14 @@ class SpeedTestWorker(object):
             # before we go in earnest to eliminate the knock-on effect.
             # We're already in the master, and it's not safe to call sync()
             # again, so just do it.
+            before_gc = perf_counter()
             gc.collect()
+            end = perf_counter()
+            logger.debug(
+                "Cleared caches in %s; storage clear: %s; gc: %s",
+                end - begin, before_gc - before_clear, end - before_gc
+            )
+
         self.sync('after clear')
 
     def __check_access_count(self, accessed, loops=1):
@@ -499,7 +508,7 @@ class SpeedTestWorker(object):
 
             db.close()
 
-        self.__check_access_count(got, loops * self.inner_loops)
+        self.__check_access_count(got, total_loops)
 
         return duration
 

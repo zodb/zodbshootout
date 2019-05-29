@@ -22,7 +22,6 @@ from __future__ import print_function, absolute_import
 
 import os
 from io import StringIO
-import pprint
 import threading
 
 from pyperf import perf_counter
@@ -121,7 +120,7 @@ class _CacheAndConnSettingFactory(object):
         stats = getattr(cache, 'stats', lambda: {})()
         if stats:
             # TODO: Get these recorded in metadata for the benchmark that just ran
-            logger.info(
+            logger.debug(
                 "Cache hit stats for %s (%s): Hits: %s Misses: %s Ratio: %s Stores: %s",
                 self.name, msg,
                 stats.get('hits'), stats.get('misses'), stats.get('ratio'), stats.get('sets')
@@ -224,25 +223,20 @@ def run_with_options(runner, options):
     # accurate: There is no other timer running that could interfere.
     # For other methods, especially if we're using gevent, we may need to make adjustments;
     # see the ThreadedRunner for details.
+    runner_kind = NonConcurrentRunner
     if concurrency > 1:
         if options.threads == 'shared':
-            speedtest = SharedThreadedRunner(data, options)
+            runner_kind = SharedThreadedRunner
         elif options.threads:
             # Unique
-            speedtest = ThreadedRunner(data, options)
+            runner_kind = ThreadedRunner
         else:
-            speedtest = ForkedRunner(data, options)
-    else:
-        speedtest = SpeedTestWorker(
-            0,
-            data
-        )
+            runner_kind = ForkedRunner
+    speedtest = runner_kind(data, options)
 
     if options.profile_dir:
         if options.threads == 'shared':
             if options.gevent:
-                # This doesn't work for non-concurrent (concurrency=1) situations
-                # TODO: Make one that does.
                 # TODO: Implement this for non-gevent concurrency.
                 speedtest.make_function_wrapper = GeventProfiledFunctionFactory(
                     options.profile_dir,
@@ -413,20 +407,22 @@ class DistributedFunction(object):
     def worker(self, worker_loops_db_factory, sync):
         worker, loops, db_factory = worker_loops_db_factory
         worker.sync = sync
+        return self.run_worker_function(worker, self.func_name, loops, db_factory)
 
+    @staticmethod
+    def run_worker_function(worker, func_name, loops, db_factory):
         thread = threading.current_thread()
-        thread.name = "%s-%s-%s" % (self.func_name, db_factory.name, worker.worker_number)
-
+        thread.name = "%s-%s-%s" % (func_name, db_factory.name, worker.worker_number)
+        f = getattr(worker, func_name)
         begin = perf_counter()
-        f = getattr(worker, self.func_name)
         time = f(loops, db_factory)
         end = perf_counter()
         logger.debug("Worker %s ran for %s",
-                     self.func_name, end - begin)
+                     func_name, end - begin)
         return time
 
 
-class AbstractDistributedRunner(object):
+class AbstractWrappingRunner(object):
     mp_strategy = None
     Function = None
     WorkerClass = SpeedTestWorker
@@ -468,17 +464,25 @@ class SharedDBFunction(object):
             close()
 
 
-class ThreadedRunner(AbstractDistributedRunner):
+class ThreadedRunner(AbstractWrappingRunner):
     mp_strategy = 'threads'
     make_function_wrapper = DistributedFunction
 
 
-class SharedThreadedRunner(AbstractDistributedRunner):
+class SharedThreadedRunner(AbstractWrappingRunner):
     mp_strategy = 'threads'
 
     def make_function_wrapper(self, runner, func_name):
         return SharedDBFunction(DistributedFunction(runner, func_name))
 
+class NonConcurrentRunner(AbstractWrappingRunner):
+
+    def make_function_wrapper(self, runner, func_name):
+        # pylint:disable=no-value-for-parameter
+        worker = self.workers[0]
+        def call(loops, db_factory):
+            return DistributedFunction.run_worker_function(worker, func_name, loops, db_factory)
+        return call
 
 class GeventProfiledFunctionFactory(object):
     def __init__(self, profile_dir, worker, inner):
