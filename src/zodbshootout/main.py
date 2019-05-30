@@ -100,6 +100,7 @@ def main(argv=None): # pylint:disable=too-many-statements
             cmd.extend(('--log', args.log))
         if args.zap:
             cmd.extend(('--zap', ','.join(args.zap)))
+        cmd.extend(('--profiler', args.profiler))
         cmd.extend(env_options)
         cmd.append(args.config_file.name)
         if args.benchmarks and 'all' not in args.benchmarks:
@@ -196,6 +197,21 @@ def main(argv=None): # pylint:disable=too-many-statements
     prof_group.add_argument(
         "--profile", dest="profile_dir", default="",
         help="Profile all tests and output results to the specified directory",
+    )
+
+    profilers = ['cProfile']
+    try:
+        __import__('vmprof')
+    except ImportError:
+        pass
+    else:
+        profilers.append('vmprof')
+
+    prof_group.add_argument(
+        "--profiler", dest="profiler",
+        default="cProfile",
+        help="The profiler to use. Must be specified with 'profile-dir'",
+        choices=profilers
     )
 
     prof_group.add_argument(

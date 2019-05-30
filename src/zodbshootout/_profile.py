@@ -38,6 +38,8 @@ from .interfaces import IDBBenchmark
 
 class AbstractProfiler(object):
 
+    PROF_DATA_EXT = '.prof'
+
     def __init__(self, profile_dir, func_name):
         self.profile_dir = profile_dir
         self.func_name = func_name
@@ -49,14 +51,17 @@ class AbstractProfiler(object):
     def __exit__(self, t, v, tb):
         self._do_exit()
 
-    def generate_file_names(self):
+    def get_thread_id_for_filename(self):
         import threading
-        tid = threading.current_thread().ident
+        return threading.current_thread().ident
+
+    def generate_file_names(self):
+        tid = self.get_thread_id_for_filename()
         db_name = '_' + self.db_name if self.db_name else ''
         basename = "%s_%s_%s%s" % (self.func_name, os.getpid(), tid, db_name)
 
         txt_fn = os.path.join(self.profile_dir, basename + ".txt")
-        prof_fn = os.path.join(self.profile_dir, basename + ".prof")
+        prof_fn = os.path.join(self.profile_dir, basename + self.PROF_DATA_EXT)
         return txt_fn, prof_fn
 
     def _do_enter(self):
@@ -88,19 +93,47 @@ class CProfiler(AbstractProfiler):
 
 
 class VMProfiler(AbstractProfiler):
+    PROF_DATA_EXT = ".vmprof"
     stat_file = None
 
+    counter = 0
+    counter_lock = None
+
+    def __init__(self, profile_dir, func_name):
+        super(VMProfiler, self).__init__(profile_dir, func_name)
+
+        if self.counter_lock is None:
+            from threading import Lock
+            VMProfiler.counter_lock = Lock()
+
+    def get_thread_id_for_filename(self):
+        # It's process wide, it doesn't matter.
+        return 0
+
     def _do_enter(self):
-        import vmprof
-        _, prof_fn = self.generate_file_names()
-        self.stat_file = open(prof_fn, 'a+b')
-        vmprof.enable(self.stat_file.fileno(), lines=True)
+        with self.counter_lock:
+            VMProfiler.counter += 1
+            if VMProfiler.counter > 1:
+                # Already enabled. Skip.
+                return
+
+            import vmprof
+            _, prof_fn = self.generate_file_names()
+            VMProfiler.stat_file = open(prof_fn, 'a+b')
+            vmprof.enable(VMProfiler.stat_file.fileno(), lines=True, real_time=True)
 
     def _do_exit(self):
-        import vmprof
-        vmprof.disable()
-        self.stat_file.flush()
-        self.stat_file.close()
+        with self.counter_lock:
+            VMProfiler.counter -= 1
+            if VMProfiler.counter != 0:
+                # Still others out there. Skip
+                return
+
+            import vmprof
+            vmprof.disable()
+            VMProfiler.stat_file.flush()
+            VMProfiler.stat_file.close()
+            VMProfiler.stat_file = None
 
 
 class ProfiledFunctionFactory(object):
@@ -121,12 +154,12 @@ class ProfiledFunction(object):
     A function wrapper that installs a profiler around the execution
     of the (distributed) functions.
 
-    This is only done in the current thread. This works fine for
-    gevent, where real threads are not actually in use. Here, we want
-    to wrap it *around* the distributed function.
+    For cProfile, this is only done in the current thread. This works
+    fine for gevent, where real threads are not actually in use. Here,
+    we want to wrap it *around* the distributed function.
 
-    For true threading, we want to wrap the distribution around
-    *this* object.
+    For true threading, we want to wrap the distribution around *this*
+    object.
     """
 
     def __init__(self, profile_dir, profile_kind, inner_kind, func_name):

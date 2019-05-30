@@ -59,6 +59,8 @@
 - Add a benchmark for empty transaction commits. This tests the
   storage synchronization --- in RelStorage, it tests polling the
   RDBMS for invalidations. See :issue:`41`.
+- Add support for using `vmprof <https://vmprof.readthedocs.io>`_ to
+  profile, instead of :mod:`cProfile`. See :issue:`34`.
 
 0.6.0 (2016-12-13)
 ==================

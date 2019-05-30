@@ -41,6 +41,8 @@ from .speedtest import ForkedSpeedTestWorker
 from .speedtest import pobject_base_size
 
 from ._profile import ProfiledFunctionFactory
+from ._profile import CProfiler
+from ._profile import VMProfiler
 
 
 from six import PY3
@@ -74,7 +76,38 @@ def _make_leak_check(options):
 
     return prep_leaks, show_leaks
 
+def setup_profiling(options, speedtest):
+    if not options.profile_dir:
+        return
 
+    if not os.path.exists(options.profile_dir):
+        os.makedirs(options.profile_dir)
+
+    if options.profile_dir:
+        factory = VMProfiler if options.profiler == 'vmprof' else CProfiler
+        if options.threads and options.gevent:
+            # It's fine to install the profiler just once around all
+            # the distributions; we're only going to be looking at a
+            # single native thread anyway.
+            speedtest.make_function_wrapper = ProfiledFunctionFactory(
+                options.profile_dir,
+                speedtest.make_function_wrapper,
+                factory
+            )
+        else:
+            # either native threads or multi-processing.
+            # We need to install the profiler *inside* each distributed task,
+            # (the other thread or process).
+            speedtest.workers = [
+                WorkerBenchmarkFunctionWrapper(w)
+                for w in speedtest.workers
+            ]
+            for w in speedtest.workers:
+                w.make_function_wrapper = ProfiledFunctionFactory(
+                    options.profile_dir,
+                    w.make_function_wrapper,
+                    factory
+                )
 
 def run_with_options(runner, options):
     # Do the gevent stuff ASAP
@@ -95,8 +128,6 @@ def run_with_options(runner, options):
     # mapping database shows this best.
     concurrency = options.concurrency
     object_size = max(options.object_size, pobject_base_size)
-    if options.profile_dir and not os.path.exists(options.profile_dir):
-        os.makedirs(options.profile_dir)
 
     if options.zap and 'add' not in options.benchmarks:
         raise Exception("Cannot zap if you're not adding")
@@ -140,29 +171,9 @@ def run_with_options(runner, options):
         else:
             runner_kind = ForkedRunner
     speedtest = runner_kind(data, options)
+    setup_profiling(options, speedtest)
 
-    if options.profile_dir:
-        if options.threads and options.gevent:
-            # It's fine to install the profiler just once around all
-            # the distributions; we're only going to be looking at a
-            # single native thread anyway.
-            speedtest.make_function_wrapper = ProfiledFunctionFactory(
-                options.profile_dir,
-                speedtest.make_function_wrapper
-            )
-        else:
-            # either native threads or multi-processing.
-            # We need to install the profiler *inside* each distributed task,
-            # (the other thread or process).
-            speedtest.workers = [
-                WorkerBenchmarkFunctionWrapper(w)
-                for w in speedtest.workers
-            ]
-            for w in speedtest.workers:
-                w.make_function_wrapper = ProfiledFunctionFactory(
-                    options.profile_dir,
-                    w.make_function_wrapper
-                )
+
 
     for db_name, db_factory in contenders:
         metadata = {
@@ -367,18 +378,13 @@ class WorkerBenchmarkFunctionWrapper(AbstractBenchmarkFunctionWrapper):
         self.delegate = worker
 
     def __setattr__(self, name, value):
-        if name == 'delegate':
+        if name in ('delegate', 'make_function_wrapper'):
             object.__setattr__(self, name, value)
             return
 
-        try:
-            object.__getattr__(self, name)
-        except AttributeError:
-            # Everything else delegates to the worker.
-            # this is important for worker.sync
-            setattr(self.delegate, name, value)
-        else:
-            object.__setattr__(self, name, value)
+        # Everything else delegates to the worker.
+        # this is important for worker.sync
+        setattr(self.delegate, name, value)
 
     def make_function_wrapper(self, func_name):
         # We just return the function.
