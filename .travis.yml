@@ -33,7 +33,7 @@ matrix:
   fast_finish: true
 before_script:
   # Coverage is very slow on PyPy. 2 minutes for CPython, more than 8 for pypy
-  - if [[ $TRAVIS_PYTHON_VERSION == pypy* ]]; Z_RUN="zodbshootout"; fi
+  - if [[ $TRAVIS_PYTHON_VERSION == pypy* ]]; then Z_RUN="zodbshootout"; fi
 script:
   - python -m zodbshootout --help
   - coverage run -m zope.testrunner --test-path=src --auto-color --auto-progress
