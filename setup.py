@@ -63,9 +63,19 @@ setup(
         ]
     },
     extras_require={
-        'mysql': ['relstorage[mysql] >= 2.0rc1'],
-        'postgresql': ['relstorage[postgresql] >= 2.0rc1'],
-        'oracle': ['relstorage[oracle] >= 2.0rc1'],
+        'mysql': [
+            'relstorage[mysql] >= 2.0rc1',
+            # Until RelStorage 3.0 is released, we need to pin to an older version
+            # of mysqlclient on Python 3.
+            # https://github.com/zodb/relstorage/issues/213
+            'mysqlclient>=1.3.7, < 1.4;platform_python_implementation=="CPython" and python_version >= "3.3" and sys_platform != "win32"',
+        ],
+        'postgresql': [
+            'relstorage[postgresql] >= 2.0rc1',
+        ],
+        'oracle': [
+            'relstorage[oracle] >= 2.0rc1',
+        ],
         "test": tests_require,
     },
     classifiers=[
