@@ -21,6 +21,7 @@ interpreter lock.
 from __future__ import print_function, absolute_import
 
 import os
+import functools
 import threading
 
 from pyperf import perf_counter
@@ -38,6 +39,9 @@ from .speedtest import SpeedTestData
 from .speedtest import SpeedTestWorker
 from .speedtest import ForkedSpeedTestWorker
 from .speedtest import pobject_base_size
+
+from ._profile import ProfiledFunctionFactory
+
 
 from six import PY3
 
@@ -94,10 +98,7 @@ def run_with_options(runner, options):
     if options.profile_dir and not os.path.exists(options.profile_dir):
         os.makedirs(options.profile_dir)
 
-    def will_run_add():
-        return options.benchmarks == ['all'] or 'add' in options.benchmarks
-
-    if options.zap and not will_run_add():
+    if options.zap and 'add' not in options.benchmarks:
         raise Exception("Cannot zap if you're not adding")
 
     contenders = []
@@ -141,13 +142,26 @@ def run_with_options(runner, options):
     speedtest = runner_kind(data, options)
 
     if options.profile_dir:
-        if options.threads == 'shared':
-            if options.gevent:
-                # TODO: Implement this for non-gevent concurrency.
-                speedtest.make_function_wrapper = GeventProfiledFunctionFactory(
+        if options.threads and options.gevent:
+            # It's fine to install the profiler just once around all
+            # the distributions; we're only going to be looking at a
+            # single native thread anyway.
+            speedtest.make_function_wrapper = ProfiledFunctionFactory(
+                options.profile_dir,
+                speedtest.make_function_wrapper
+            )
+        else:
+            # either native threads or multi-processing.
+            # We need to install the profiler *inside* each distributed task,
+            # (the other thread or process).
+            speedtest.workers = [
+                WorkerBenchmarkFunctionWrapper(w)
+                for w in speedtest.workers
+            ]
+            for w in speedtest.workers:
+                w.make_function_wrapper = ProfiledFunctionFactory(
                     options.profile_dir,
-                    options.worker_task,
-                    speedtest.make_function_wrapper
+                    w.make_function_wrapper
                 )
 
     for db_name, db_factory in contenders:
@@ -171,7 +185,7 @@ def run_with_options(runner, options):
                 ('%s: read %d steamin objects', speedtest.bench_steamin_read, 'steamin',),
                 ('%s: empty commit', speedtest.bench_empty_transaction_commit, 'commit',),
         ):
-            if options.benchmarks != ['all'] and bench_opt_name not in options.benchmarks:
+            if bench_opt_name not in options.benchmarks:
                 continue
 
             name_args = (db_name, ) if '%d' not in bench_descr else (db_name, objects_per_txn)
@@ -209,6 +223,11 @@ def run_with_options(runner, options):
 
             fname = os.path.join(dir_name, db_name + '_' + str(objects_per_txn) + '.json')
             suite.dump(fname, replace=True)
+
+        # TODO: If we used cprofile to create stats files, we should
+        # now read them back in and combine them for any given benchmark to get
+        # more accurate results: one file per benchmark instead of many, many
+        # as pyperf distributes things.
 
 @implementer(IDBBenchmark)
 class DistributedFunction(object):
@@ -312,6 +331,10 @@ class DistributedFunction(object):
         # This is the function that's called in the worker, either
         # in a different thread, or in a different process.
         worker, loops, db_factory = worker_loops_db_factory
+        assert worker is not None
+        assert loops is not None
+        assert callable(db_factory)
+        assert callable(sync)
         worker.sync = sync
         return self.run_worker_function(worker, self.func_name, loops, db_factory)
 
@@ -327,10 +350,44 @@ class DistributedFunction(object):
                      func_name, end - begin)
         return time
 
+class AbstractBenchmarkFunctionWrapper(object):
+    delegate = None
 
-class AbstractWrappingRunner(object):
+    def __getattr__(self, name):
+        if name.startswith("bench_"):
+            return self.make_function_wrapper(name)
+        return getattr(self.delegate, name)
+
+    def make_function_wrapper(self, func_name):
+        raise NotImplementedError
+
+class WorkerBenchmarkFunctionWrapper(AbstractBenchmarkFunctionWrapper):
+
+    def __init__(self, worker):
+        self.delegate = worker
+
+    def __setattr__(self, name, value):
+        if name == 'delegate':
+            object.__setattr__(self, name, value)
+            return
+
+        try:
+            object.__getattr__(self, name)
+        except AttributeError:
+            # Everything else delegates to the worker.
+            # this is important for worker.sync
+            setattr(self.delegate, name, value)
+        else:
+            object.__setattr__(self, name, value)
+
+    def make_function_wrapper(self, func_name):
+        # We just return the function.
+        # Instances may have this set directly, so save storage space for it.
+        return getattr(self.delegate, func_name)
+
+class AbstractWrappingRunner(AbstractBenchmarkFunctionWrapper):
+    # pylint:disable=abstract-method
     mp_strategy = None
-    Function = None
     WorkerClass = SpeedTestWorker
 
     def __init__(self, data, options):
@@ -338,14 +395,9 @@ class AbstractWrappingRunner(object):
         self.concurrency = options.concurrency
         self.workers = [self.WorkerClass(i, data) for i in range(self.concurrency)]
 
-    def __getattr__(self, name):
-        if name.startswith("bench_"):
-            wrapper = self.make_function_wrapper(self, name)
-            return wrapper
-        return getattr(self.workers[0], name)
-
-    def make_function_wrapper(self, runner, func_name):
-        raise NotImplementedError
+    @property
+    def delegate(self):
+        return self.workers[0]
 
 @implementer(IDBBenchmark)
 class SharedDBFunction(object):
@@ -357,33 +409,40 @@ class SharedDBFunction(object):
         return getattr(self.inner, name)
 
     def __call__(self, loops, db_factory):
+
         class DbAndClose(object):
             factory = db_factory
             def __init__(self):
+                from threading import RLock
+                self.lock = RLock()
                 self.name = self.factory.name
                 self.db = None
                 self.reset()
 
             def reset(self):
-                self.db = db = self.factory()
-                db.close = lambda: None
-                speedtest_zap_all = db.speedtest_zap_all
-                def shared_zap():
-                    self.close()
-                    speedtest_zap_all()
-                    self.reset()
-                db.speedtest_zap_all = shared_zap
+                with self.lock:
+                    self.db = db = self.factory()
+                    db.close = lambda: None
+                    speedtest_zap_all = db.speedtest_zap_all
+                    def shared_zap():
+                        with self.lock:
+                            self.close()
+                            speedtest_zap_all()
+                            self.reset()
+                    db.speedtest_zap_all = shared_zap
 
             def close(self):
-                if self.db is not None:
-                    db = self.db
-                    self.db = None
+                with self.lock:
+                    if self.db is not None:
+                        db = self.db
+                        self.db = None
 
-                    del db.close
-                    db.close()
+                        del db.close
+                        db.close()
 
             def __call__(self):
-                return self.db
+                with self.lock:
+                    return self.db
 
         db_and_close = DbAndClose()
         try:
@@ -394,78 +453,23 @@ class SharedDBFunction(object):
 
 class ThreadedRunner(AbstractWrappingRunner):
     mp_strategy = 'threads'
-    make_function_wrapper = DistributedFunction
+
+    def make_function_wrapper(self, func_name):
+        return DistributedFunction(self, func_name)
 
 
 class SharedThreadedRunner(AbstractWrappingRunner):
     mp_strategy = 'threads'
 
-    def make_function_wrapper(self, runner, func_name):
-        return SharedDBFunction(DistributedFunction(runner, func_name))
+    def make_function_wrapper(self, func_name):
+        return SharedDBFunction(DistributedFunction(self, func_name))
 
 class NonConcurrentRunner(AbstractWrappingRunner):
 
-    def make_function_wrapper(self, runner, func_name):
+    def make_function_wrapper(self, func_name):
         # pylint:disable=no-value-for-parameter
         worker = self.workers[0]
-        def call(loops, db_factory):
-            return DistributedFunction.run_worker_function(worker, func_name, loops, db_factory)
-        return call
-
-class GeventProfiledFunctionFactory(object):
-    def __init__(self, profile_dir, worker, inner):
-        self.profile_dir = profile_dir
-        self.inner = inner
-        self.worker = worker
-
-    def __call__(self, *args):
-        return GeventProfiledFunction(self.profile_dir,
-                                      self.inner,
-                                      *args)
-
-@implementer(IDBBenchmark)
-class GeventProfiledFunction(object):
-    """
-    A function wrapper that installs a profiler around the execution
-    of the functions.
-
-    This is only done in the current thread, so it's best for gevent,
-    where real threads are not actually in use.
-    """
-
-    def __init__(self, profile_dir, inner, runner, func_name):
-        self.profile_dir = profile_dir
-        self.inner = inner(runner, func_name)
-        import cProfile
-        self.profiler = cProfile.Profile()
-
-    def __getattr__(self, name):
-        return getattr(self.inner, name)
-
-    def __call__(self, loops, db_factory):
-        basename = self.inner.func_name + '_' + str(os.getpid())
-
-        txt_fn = os.path.join(self.profile_dir, basename + ".txt")
-        prof_fn = os.path.join(self.profile_dir, basename + ".prof")
-        # TODO: Make this configurable to use vmProf
-
-        # We're trying to capture profiling from all the warmup runs, etc,
-        # since that all takes much longer.
-        from pstats import Stats
-        self.profiler.enable()
-        try:
-            return self.inner(loops, db_factory)
-        finally:
-            self.profiler.disable()
-            self.profiler.dump_stats(prof_fn)
-
-            with open(txt_fn, 'w') as f:
-                st = Stats(self.profiler, stream=f)
-                st.strip_dirs()
-                st.sort_stats('cumulative')
-                st.print_stats()
-
-
+        return functools.partial(DistributedFunction.run_worker_function, worker, func_name)
 
 class ForkedRunner(ThreadedRunner):
     mp_strategy = 'mp'

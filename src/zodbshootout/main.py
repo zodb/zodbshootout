@@ -102,7 +102,8 @@ def main(argv=None): # pylint:disable=too-many-statements
             cmd.extend(('--zap', ','.join(args.zap)))
         cmd.extend(env_options)
         cmd.append(args.config_file.name)
-        cmd.extend(args.benchmarks)
+        if args.benchmarks and 'all' not in args.benchmarks:
+            cmd.extend(args.benchmarks)
 
     # pyperf uses subprocess,s make sure it's gevent patched too.
     from pyperf import Runner
@@ -231,7 +232,7 @@ def main(argv=None): # pylint:disable=too-many-statements
             options.threads = 'shared'
 
     if 'all' in options.benchmarks or options.benchmarks == 'all':
-        options.benchmarks = ['all']
+        options.benchmarks = ContainsAll()
 
     if options.log:
         import logging

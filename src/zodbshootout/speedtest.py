@@ -20,11 +20,6 @@ from __future__ import print_function, absolute_import
 # so it's safe to import anything.
 import gc
 
-from pstats import Stats
-
-
-import cProfile
-
 import random
 
 from pyperf import perf_counter
@@ -50,65 +45,6 @@ def itervalues(d):
 
 random.seed(__file__) # reproducible random functions
 
-
-class AbstractProfiler(object):
-    enabled = False
-    def __init__(self, prof_fn, stat_fn):
-        self.i_enabled = False
-        self.profiler = None
-        self.prof_fn = prof_fn
-        self.stat_fn = stat_fn
-
-    def __enter__(self):
-        if type(self).enabled:
-            return
-        self.i_enabled = True
-        type(self).enabled = True
-        self._do_enter()
-
-    def __exit__(self, t, v, tb):
-        if not self.i_enabled:
-            return
-        self._do_exit()
-        type(self).enabled = False
-
-    def _do_enter(self):
-        raise NotImplementedError
-
-    def _do_exit(self):
-        raise NotImplementedError
-
-class useCProfile(AbstractProfiler):
-
-    def _do_enter(self):
-        self.profiler = cProfile.Profile()
-        self.profiler.enable()
-
-    def _do_exit(self):
-        self.profiler.disable()
-
-        self.profiler.dump_stats(self.prof_fn)
-
-        with open(self.stat_fn, 'w') as f:
-            st = Stats(self.profiler, stream=f)
-            st.strip_dirs()
-            st.sort_stats('cumulative')
-            st.print_stats()
-
-
-class useVMProf(AbstractProfiler):
-    stat_file = None
-
-    def _do_enter(self):
-        import vmprof
-        self.stat_file = open(self.prof_fn, 'w+b')
-        vmprof.enable(self.stat_file.fileno(), lines=True)
-
-    def _do_exit(self):
-        import vmprof
-        vmprof.disable()
-        self.stat_file.flush()
-        self.stat_file.close()
 
 class SpeedTestData(object):
 
@@ -440,6 +376,7 @@ class SpeedTestWorker(object):
         self.zap_database(db_factory)
 
         db = db_factory()
+        assert db is not None, db_factory
         duration = 0
 
         conn = db.open()
