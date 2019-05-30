@@ -56,6 +56,9 @@
   configuration. Previously, the second and further uses of the same
   storage would not be zapped and so would grow with the data from the
   previous contender tests. See :issue:`42`.
+- Add a benchmark for empty transaction commits. This tests the
+  storage synchronization --- in RelStorage, it tests polling the
+  RDBMS for invalidations. See :issue:`41`.
 
 0.6.0 (2016-12-13)
 ==================

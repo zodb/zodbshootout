@@ -627,6 +627,28 @@ class SpeedTestWorker(object):
         return duration
 
 
+    @_inner_loops
+    def bench_empty_transaction_commit(self, loops, db_factory):
+        db = db_factory()
+        # When we open a connection, it adds itself to the transaction
+        # manager as a synchronizer.
+        # This does things when transactions are opened and closed.
+        # For example, it synchronizes the storage.
+        # The same set of calls happens for commit or abort.
+        transaction_manager = transaction.TransactionManager(explicit=True)
+        conn = db.open(transaction_manager)
+        conn.getTransferCounts(True) # clear them
+
+        begin = perf_counter()
+        for _ in range(loops * self.inner_loops):
+            transaction_manager.begin()
+            transaction_manager.commit()
+        end = perf_counter()
+        self.__conn_did_not_load(conn)
+        conn.close()
+        return end - begin
+
+
 class ForkedSpeedTestWorker(SpeedTestWorker):
     # Used when concurrency is achieved through multiple
     # processes, with unique DB objects.

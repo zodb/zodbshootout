@@ -214,7 +214,8 @@ def main(argv=None): # pylint:disable=too-many-statements
     parser.add_argument('benchmarks',
                         nargs='*',
                         default='all',
-                        choices=['add', 'update', 'warm', 'cold', 'hot', 'steamin', 'all'])
+                        choices=['add', 'update', 'warm',
+                                 'cold', 'hot', 'steamin', 'all', 'commit'])
     options = runner.parse_args(argv)
 
     #import os

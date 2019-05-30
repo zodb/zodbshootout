@@ -163,17 +163,19 @@ def run_with_options(runner, options):
         db_benchmarks = {}
         # TODO: Where to include leak prints?
         for bench_descr, bench_func, bench_opt_name in (
-                ('%s: add %s objects', speedtest.bench_add, 'add'),
-                ('%s: update %s objects', speedtest.bench_update, 'update',),
-                ('%s: read %s cold objects', speedtest.bench_cold_read, 'cold',),
-                ('%s: read %s warm objects', speedtest.bench_read_after_write, 'warm',),
-                ('%s: read %s hot objects', speedtest.bench_hot_read, 'hot',),
-                ('%s: read %s steamin objects', speedtest.bench_steamin_read, 'steamin',),
+                ('%s: add %d objects', speedtest.bench_add, 'add'),
+                ('%s: update %d objects', speedtest.bench_update, 'update',),
+                ('%s: read %d cold objects', speedtest.bench_cold_read, 'cold',),
+                ('%s: read %d warm objects', speedtest.bench_read_after_write, 'warm',),
+                ('%s: read %d hot objects', speedtest.bench_hot_read, 'hot',),
+                ('%s: read %d steamin objects', speedtest.bench_steamin_read, 'steamin',),
+                ('%s: empty commit', speedtest.bench_empty_transaction_commit, 'commit',),
         ):
             if options.benchmarks != ['all'] and bench_opt_name not in options.benchmarks:
                 continue
 
-            bench_name = bench_descr % (db_name, objects_per_txn)
+            name_args = (db_name, ) if '%d' not in bench_descr else (db_name, objects_per_txn)
+            bench_name = bench_descr % name_args
             if getattr(bench_func, 'inner_loops', None):
                 inner_loops = speedtest.inner_loops
             else:
