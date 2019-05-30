@@ -22,6 +22,7 @@ env:
     - PYTHONHASHSEED=42
     - PYTHONPATH=.travis
     - Z_FAST="--processes 1 --loops 1 --values 1 --warmups 0 --object-counts 100"
+    - Z_RUN="coverage run .travis/cover.py"
 # We can test each one separately, but it
 # uses less build jobs in total to run them together
 # which is overall a bit faster.
@@ -30,12 +31,15 @@ env:
     #- ENV=file
 matrix:
   fast_finish: true
+before_script:
+  # Coverage is very slow on PyPy. 2 minutes for CPython, more than 8 for pypy
+  - if [[ $TRAVIS_PYTHON_VERSION == pypy* ]]; Z_RUN="zodbshootout"; fi
 script:
   - python -m zodbshootout --help
   - coverage run -m zope.testrunner --test-path=src --auto-color --auto-progress
-  - coverage run .travis/cover.py $Z_FAST -c 1 .travis/$ENV.conf --btrees --min-objects 100 --track-memory
-  - coverage run .travis/cover.py $Z_FAST -c 3 .travis/$ENV.conf --min-objects 200 --threads --gevent -o /tmp/f.json
-  - coverage run .travis/cover.py $Z_FAST -c 3 --blobs .travis/$ENV.conf --threads
+  - $Z_RUN $Z_FAST -c 1 .travis/$ENV.conf --btrees --min-objects 100
+  - $Z_RUN $Z_FAST -c 3 .travis/$ENV.conf --min-objects 200 --threads --gevent -o /tmp/f.json
+  - $Z_RUN $Z_FAST -c 3 --blobs .travis/$ENV.conf --threads
 after_success:
   - coverage combine
   - coveralls
