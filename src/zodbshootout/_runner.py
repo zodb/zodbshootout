@@ -21,12 +21,19 @@ interpreter lock.
 from __future__ import print_function, absolute_import
 
 import os
-from io import StringIO
 import threading
 
 from pyperf import perf_counter
 from pyperf import Benchmark
 from pyperf import BenchmarkSuite
+
+from zope.interface import implementer
+
+from .interfaces import IDBBenchmark
+
+from ._dbsupport import get_databases_from_conf_file
+from ._dbsupport import BenchmarkDBFactory
+from ._dbsupport import MappingFactory
 
 from .speedtest import SpeedTestData
 from .speedtest import SpeedTestWorker
@@ -34,20 +41,12 @@ from .speedtest import pobject_base_size
 
 from six import PY3
 
-import ZConfig
-
 
 if PY3:
     ask = input
 else:
     ask = raw_input # pylint:disable=undefined-variable
 
-schema_xml = u"""
-<schema>
-  <import package="ZODB"/>
-  <multisection type="ZODB.database" name="*" attribute="databases" />
-</schema>
-"""
 
 logger = __import__('logging').getLogger(__name__)
 
@@ -56,7 +55,7 @@ def _make_leak_check(options):
         return lambda: None, lambda: None
 
     if PY3:
-        SIO = StringIO
+        from io import StringIO as SIO
     else:
         from io import BytesIO as SIO
 
@@ -78,96 +77,15 @@ def _make_leak_check(options):
 
     return prep_leaks, show_leaks
 
-def _zap(contenders, force=False):
-    for db_name, db in contenders:
-        db = db.open()
-        if hasattr(db.storage, 'zap_all'):
-            if force:
-                resp = 'y'
-            else:
-                prompt = "Really destroy all data in %s? [yN] " % db_name
-                resp = ask(prompt)
-            if resp in 'yY':
-                db.storage.zap_all()
-        db.close()
+def _can_zap(zodb_factory, force=False):
+    if force:
+        return True
 
-
-class _CacheAndConnSettingFactory(object):
-
-    def __init__(self, zodb_conf_factory, objects_per_txn, concurrency):
-        self.factory = zodb_conf_factory
-        self.objects_per_txn = objects_per_txn
-        self.concurrency = concurrency
-
-    def __getattr__(self, name):
-        return getattr(self.factory, name)
-
-    def open(self):
-        db = self.factory.open()
-        # Explicitly set the number of cached objects so we're
-        # using the storage in an understandable way.
-        # Set to double the number of objects we should have created
-        # to account for btree nodes.
-        db.setCacheSize(self.objects_per_txn * 3)
-        # Prevent warnings about large concurrent shared databases.
-        db.setPoolSize(self.concurrency)
-        db.speedtest_log_cache_stats = lambda msg='': self._log_cache_stats(db, msg)
-        return db
-
-    def _log_cache_stats(self, db, msg=''):
-        storage = db.storage
-        cache = getattr(storage, '_cache', None)
-        stats = getattr(cache, 'stats', lambda: {})()
-        if stats:
-            # TODO: Get these recorded in metadata for the benchmark that just ran
-            logger.debug(
-                "Cache hit stats for %s (%s): Hits: %s Misses: %s Ratio: %s Stores: %s",
-                self.name, msg,
-                stats.get('hits'), stats.get('misses'), stats.get('ratio'), stats.get('sets')
-            )
-        else:
-            logger.debug("No storage cache found for %s (%s)",
-                         self.name, msg)
-
-    def __call__(self):
-        return self.open()
-
-    def __repr__(self):
-        return "CAC(%s)" % (self.name,)
-
-
-class _MappingFactory(object):
-
-    name = 'MappingStorage'
-
-    def __init__(self, concurrency, data):
-        self.concurrency = concurrency
-        self.data = data
-
-    def open(self):
-        from ZODB import DB
-        from ZODB.MappingStorage import MappingStorage
-
-        db = DB(MappingStorage())
-        import transaction
-        db.close = lambda: None
-        self.data.populate(lambda: db)
-        del db.close
-        mconn = db.open()
-        mroot = mconn.root()
-        for worker in range(self.concurrency):
-            mroot['speedtest'][worker].update(self.data.data_to_store())
-        transaction.commit()
-        mconn.cacheMinimize()
-        mconn.close()
-        return db
-
-    def __call__(self):
-        return self.open()
+    prompt = "Really destroy all data in %s? [yN] " % zodb_factory.name
+    resp = ask(prompt)
+    return resp in 'yY'
 
 def run_with_options(runner, options):
-    conf_fn = options.config_file
-
     # Do the gevent stuff ASAP
     if getattr(options, 'gevent', False):
         # Because of what we import up top, this must have
@@ -189,18 +107,20 @@ def run_with_options(runner, options):
     if options.profile_dir and not os.path.exists(options.profile_dir):
         os.makedirs(options.profile_dir)
 
-    schema = ZConfig.loadSchemaFile(StringIO(schema_xml))
-    config, _handler = ZConfig.loadConfigFile(schema, conf_fn)
-    contenders = [(db.name, _CacheAndConnSettingFactory(db, objects_per_txn, concurrency))
-                  for db in config.databases]
-
     def will_run_add():
         return options.benchmarks == ['all'] or 'add' in options.benchmarks
 
-    if options.zap:
-        if not will_run_add():
-            raise Exception("Cannot zap if you're not adding")
-        _zap(contenders, force=options.zap == 'force')
+    if options.zap and not will_run_add():
+        raise Exception("Cannot zap if you're not adding")
+
+    print(options.config_file)
+    config_databases = get_databases_from_conf_file(options.config_file)
+    contenders = []
+    for db_factory in config_databases:
+        can_zap = options.zap and _can_zap(db_factory, force=options.zap == 'force')
+        factory = BenchmarkDBFactory(db_factory, objects_per_txn, concurrency,
+                                     can_zap=can_zap)
+        contenders.append((db_factory.name, factory))
 
     data = SpeedTestData(concurrency, objects_per_txn, object_size)
     data.min_object_count = data.min_object_count
@@ -215,8 +135,17 @@ def run_with_options(runner, options):
     # as a ground floor to set expectations.
     if options.include_mapping:
         contenders.insert(0, ('mapping',
-                              _CacheAndConnSettingFactory(_MappingFactory(concurrency, data),
-                                                          objects_per_txn, concurrency)))
+                              BenchmarkDBFactory(MappingFactory(concurrency, data),
+                                                 objects_per_txn, concurrency)))
+
+
+    # TODO: Move this to the first run of each contender so we always
+    # zap even if we share the backing database between contenders.
+    for _, factory in contenders:
+        db = factory.open()
+        db.close()
+        db.speedtest_zap_all()
+
 
     # For concurrency of 1, or if we're using forked concurrency, we
     # want to take the times as reported by the benchmark functions as
@@ -307,6 +236,7 @@ def run_with_options(runner, options):
             fname = os.path.join(dir_name, db_name + '_' + str(objects_per_txn) + '.json')
             suite.dump(fname, replace=True)
 
+@implementer(IDBBenchmark)
 class DistributedFunction(object):
     options = None
 
@@ -405,6 +335,8 @@ class DistributedFunction(object):
         return result
 
     def worker(self, worker_loops_db_factory, sync):
+        # This is the function that's called in the worker, either
+        # in a different thread, or in a different process.
         worker, loops, db_factory = worker_loops_db_factory
         worker.sync = sync
         return self.run_worker_function(worker, self.func_name, loops, db_factory)
@@ -441,7 +373,7 @@ class AbstractWrappingRunner(object):
     def make_function_wrapper(self, runner, func_name):
         raise NotImplementedError
 
-
+@implementer(IDBBenchmark)
 class SharedDBFunction(object):
 
     def __init__(self, inner):
@@ -495,6 +427,7 @@ class GeventProfiledFunctionFactory(object):
                                       self.inner,
                                       *args)
 
+@implementer(IDBBenchmark)
 class GeventProfiledFunction(object):
     """
     A function wrapper that installs a profiler around the execution

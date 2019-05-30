@@ -28,6 +28,7 @@ install_requires = [
 
 tests_require = [
     'zope.testrunner',
+    'nti.testing',
 ]
 
 def read_file(*path):
