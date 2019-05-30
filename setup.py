@@ -20,13 +20,14 @@ import os
 install_requires = [
     'objgraph',
     'setuptools',
-    # ZODB and ZEO are handled as extras with environment markers
-    #'ZODB',
-    #'ZEO'
+    'pyperf',
+    'ZODB >= 4.4.2',
+    'ZEO >= 4.2.0',
+    'statistics; python_version == "2.7"'
 ]
 
 tests_require = [
-
+    'zope.testrunner',
 ]
 
 def read_file(*path):
@@ -56,36 +57,24 @@ setup(
     zip_safe=False,
     install_requires=install_requires,
     tests_require=tests_require,
-    test_suite='zodbshootout.tests',
     entry_points={
         'console_scripts': [
             'zodbshootout = zodbshootout.main:main',
         ]
     },
     extras_require={
-        'mysql': ['relstorage[mysql] >= 2.0rc1'],
-        'postgresql': ['relstorage[postgresql] >= 2.0rc1'],
-        'oracle': ['relstorage[oracle] >= 2.0rc1' ],
-        ':python_version == "2.7"': [
-            'statistics'
+        'mysql': [
+            'relstorage[mysql] >= 2.0rc1',
+            # Until RelStorage 3.0 is released, we need to pin to an older version
+            # of mysqlclient on Python 3.
+            # https://github.com/zodb/relstorage/issues/213
+            'mysqlclient>=1.3.7, < 1.4;platform_python_implementation=="CPython" and python_version >= "3.3" and sys_platform != "win32"',
         ],
-        ":python_full_version >= '2.7.9'": [
-            'ZODB >= 4.4.2',
-            'ZEO >= 4.2.0',
+        'postgresql': [
+            'relstorage[postgresql] >= 2.0rc1',
         ],
-        ":python_full_version == '3.6.0rc1'": [
-            # For some reason ZEO isn't getting installed
-            # on 3.6rc1/pip 9.0.1/tox 2.5.1. Looks like the
-            # version selection <, >= environment markers aren't working.
-            # So we give a full version spec, which seems to work.
-            'ZODB >= 4.4.2',
-            'ZEO >= 4.2.0',
-        ],
-        ":python_full_version < '2.7.9'": [
-            # We must pin old versions prior to 2.7.9 because ZEO
-            # 5 only runs on versions with good SSL support.
-            'ZODB >= 4.4.2, <5.0',
-            'ZEO >= 4.2.0, <5.0'
+        'oracle': [
+            'relstorage[oracle] >= 2.0rc1',
         ],
         "test": tests_require,
     },

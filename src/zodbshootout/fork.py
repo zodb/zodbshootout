@@ -15,20 +15,30 @@
 Multiprocessing utilities.
 """
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function
 from multiprocessing import Process as MPProcess
 from multiprocessing import Queue as MPQueue
 
 from threading import Thread as MTProcess
+from threading import Lock as MTLock
+from threading import Event as MTEvent
 from six.moves.queue import Queue as MTQueue
 
+gevent_threads = False
 try:
     import gevent.monkey
 except ImportError:
     pass
 else:
     if gevent.monkey.is_module_patched('threading'):
+        # pylint:disable=function-redefined
+        gevent_threads = True
         from gevent.queue import Queue as MTQueue
+        from gevent.event import Event as MTEvent
+        class MTLock(object):
+            def acquire(self):
+                pass
+            release = acquire
 
 from six.moves.queue import Empty
 import time
@@ -62,6 +72,19 @@ class ExceptionInChildError(ChildProcessError):
     """
 
 
+class _Unwrapper(object):
+
+    def __init__(self, func):
+        self.func = func
+
+    def __call__(self, param, sync):
+        args, kwargs = param
+        return self.func(*args, **kwargs)
+
+    def __repr__(self):
+        return repr(self.func)
+
+
 def run_in_child(func, strategy, *args, **kwargs):
     """
     Call a function in a child process.
@@ -70,14 +93,7 @@ def run_in_child(func, strategy, *args, **kwargs):
 
     :return: Whatever the function returned.
     """
-
-    Process, Queue = strategies[strategy]
-
-    queue = Queue()
-
-    child = SynclessChild(queue, func, Process, args, kwargs)
-
-    return _poll_children(queue, {child.child_num: child})[0]
+    return distribute(_Unwrapper(func), [(args, kwargs)], strategy)[0]
 
 
 class Child(object):
@@ -88,6 +104,9 @@ class Child(object):
         self.func = func
         self.param = param
         self.process = Process(target=self.run)
+        if hasattr(self.process, 'name'):
+            self.process.name = 'Child %s (%r)' % (self.child_num, self.func)
+
         self.child_queue = Queue()
 
     def _execute_func(self):
@@ -124,8 +143,8 @@ class Child(object):
             if hasattr(self.child_queue, 'close'):
                 self.child_queue.close()
 
-    def sync(self):
-        self.parent_queue.put((self.child_num, 'sync', None))
+    def sync(self, name):
+        self.parent_queue.put((self.child_num, 'sync', name))
         resume_time = self.child_queue.get()
         now = time.time()
         if now > resume_time:
@@ -137,22 +156,64 @@ class Child(object):
         delay = resume_time - time.time() - 0.1
         if delay > 0:
             time.sleep(delay)
-        # busy wait until the exact resume time
+        # get as close as we can to the exact resume time
         while time.time() < resume_time:
-            pass
+            # On CPython, this uses a system call (select() on unix),
+            # and does so while allowing threads and interrupts. In
+            # gevent, it lets the loop cycle.
+            time.sleep(0.0001)
+
+    def __str__(self):
+        return "%s(%s)" % (self.__class__.__name__,
+                           getattr(self.process, 'name', self.child_num))
+
 
 class SynclessChild(Child):
 
-    def __init__(self, parent_queue, func, Process, args, kwargs):
-        Child.__init__(self, 0, parent_queue, func, None, Process, lambda: None)
-        self._args = args
-        self._kwargs = kwargs
+    def sync(self, name):
+        pass
 
-    def _execute_func(self):
-        return self.func(*self._args, **self._kwargs)
 
-    def sync(self):
-        raise NotImplementedError()
+class ThreadedChild(Child):
+    """
+    A child object that uses fast thread synchronization.
+    """
+
+    event_lock = None
+    events = None
+    child_count = None
+
+    def herd_init(self, event_lock, events, child_count):
+        self.event_lock = event_lock
+        self.events = events
+        self.child_count = child_count
+
+    def sync(self, name):
+        # In gevent, we don't actually take a lock here. So this
+        # method MUST NOT do anything that could cause a greenlet switch
+        # until we're ready.
+        self.event_lock.acquire()
+        event, count = self.events.get(name, (None, None))
+        if event is None:
+            # I'm the first one here!
+            event = MTEvent()
+            count = 0
+
+        count += 1
+        self.events[name] = (event, count)
+        assert len(self.events) == 1, (name, self.events)
+        if count < self.child_count:
+            self.event_lock.release()
+            event.wait()
+        else:
+            # I'm the last one here! Wake everybody else up.
+            del self.events[name]
+            assert not self.events, (name, self.events)
+            event.set()
+            self.event_lock.release()
+            # I'm going to keep going by returning from this function.
+            # Next time I sleep others will wake up.
+
 
 def _poll_children(parent_queue, children, before_poll=lambda: None):
 
@@ -161,14 +222,18 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
             child.start()
 
         results = []
-        sync_waiting = set(children)
+        # Map from a string naming a sync point to the
+        # set of children (numbers) that are waiting there.
+        # This should only ever have at most one name in it; if there are
+        # more, it means we're trying to nest sync points.
+        sync_waiting = {}
 
         before_poll()
 
         while children:
 
             try:
-                child_num, msg, arg = parent_queue.get(timeout=1)
+                child_num, msg, arg = parent_queue.get(timeout=10)
             except Empty:
                 # If we're running with gevent patches, but the driver isn't
                 # cooperative, we may have timed out before the switch. But there may be
@@ -198,17 +263,23 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
             elif msg == 'system_exit':
                 raise UnexpectedChildDeathError()
             elif msg == 'sync':
-                sync_waiting.remove(child_num)
+                if arg not in sync_waiting:
+                    sync_waiting[arg] = set()
+                sync_waiting[arg].add(child_num)
+
+                if len(sync_waiting) != 1:
+                    raise AssertionError("Children at different sync points!")
             else:
                 raise AssertionError("unknown message: %s" % msg)
 
-            if not sync_waiting:
+            if msg == 'sync' and len(sync_waiting[arg]) == len(children):
                 # All children have called sync(), so tell them
                 # to resume shortly and set up for another sync.
+                del sync_waiting[arg] # = set(children)
+                assert not sync_waiting
                 resume_time = time.time() + MESSAGE_DELAY
                 for child in children.values():
                     child.child_queue.put(resume_time)
-                sync_waiting = set(children)
 
         return results
     finally:
@@ -218,6 +289,8 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
             parent_queue.cancel_join_thread()
 
         for child in children.values():
+            # multiprocess children can be forcibly killed,
+            # threads cannot. (greenlets could)
             if hasattr(child.process, 'terminate'):
                 child.process.terminate()
             child.process.join(1)
@@ -234,7 +307,7 @@ def distribute(func, param_iter, strategy='mp',
     The second parameter for each call is a "sync" function. The sync
     function pauses execution, then resumes all processes at
     approximately the same time. It is **required** that all child
-    processes will the sync function the same number of times.
+    processes call the sync function the same number of times.
 
     The results of calling the function are appended to a list, which
     is returned once all functions have returned.  If any function
@@ -250,8 +323,25 @@ def distribute(func, param_iter, strategy='mp',
 
     children = {}
     parent_queue = Queue()
+
+    events = {}
+    lock = MTLock()
+
+    child_factory = Child
+    if strategy == 'threads':
+        child_factory = ThreadedChild
+    else:
+        # MP is no longer needing to sync because
+        # we don't do phases at the child level anymore, it's
+        # higher.
+        child_factory = SynclessChild
+
     for child_num, param in enumerate(param_iter):
-        child = Child(child_num, parent_queue, func, param, Process, Queue)
+        child = child_factory(child_num, parent_queue, func, param, Process, Queue)
         children[child_num] = child
+
+    if child_factory is ThreadedChild:
+        for child in children.values():
+            child.herd_init(lock, events, len(children))
 
     return _poll_children(parent_queue, children, before_poll)
