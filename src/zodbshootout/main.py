@@ -59,7 +59,7 @@ def main(argv=None): # pylint:disable=too-many-statements
         if args.object_size:
             cmd.extend(('--object-size', str(args.object_size)))
         if args.btrees:
-            cmd.extend("--btrees", args.btrees)
+            cmd.extend(("--btrees", args.btrees))
         if args.use_blobs:
             cmd.extend(("--blobs",))
         if args.concurrency:
