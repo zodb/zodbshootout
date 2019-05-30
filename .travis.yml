@@ -45,7 +45,7 @@ notifications:
 install:
   - pip install -U pip setuptools
   - pip install -U coveralls coverage
-  - pip install -U gevent
+  - pip install -U "gevent>=1.5a1"
   - pip install -U -e .[test]
   - .travis/setup-$ENV.sh
 
