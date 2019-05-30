@@ -51,7 +51,6 @@ def itervalues(d):
 random.seed(__file__) # reproducible random functions
 
 
-
 class AbstractProfiler(object):
     enabled = False
     def __init__(self, prof_fn, stat_fn):
@@ -235,6 +234,7 @@ class SpeedTestData(object):
         root = conn.root()
         self._populate_into_open_database(db, conn, root)
         conn.close()
+        conn.cacheMinimize()
         db.close()
 
     def _populate_into_open_database(self, db, conn, root):
@@ -302,15 +302,58 @@ class SpeedTestWorker(object):
     def data_to_store(self):
         return self.data.data_to_store()
 
+    def zap_database(self, db_factory):
+        # Do actions before initiating the add benchmark.
+        self.sync_before_zap_database()
+        if self.worker_number == 0:
+            logger.debug("In master, zapping database")
+            # Only the master process needs to zap.
+            # zapping could be a no-op.
+            db = db_factory()
+            db.close()
+            db.speedtest_zap_all()
+            # Populate everything back
+            logger.debug("In master, populating database")
+            self.data.populate(db_factory)
+        self.sync_after_zap_database()
+
+    def sync_before_zap_database(self):
+        self.sync('before zap')
+
+    def sync_after_zap_database(self):
+        self.sync('after zap')
+
     def sync(self, name):
         # Replace this with something that does something if you
         # know you need to really sync up to prevent interference.
+        # This is the primitive function that all other sync operations
+        # are built on.
         pass
 
     def should_clear_all_caches(self):
         # By default, only the master should do that.
         # But MP tasks will do different.
         return self.worker_number == 0
+
+    def sync_before_clear_caches(self):
+        # Because we're going to go over all connections in the
+        # database pool, we need to sync all users of the database
+        # object to be sure no one is using a connection. Note that mp
+        # tasks don't need to do this.
+        self.sync('before clear')
+
+    def sync_after_clear_caches(self):
+        # Don't let anyone start running until we're all done clearing
+        # caches. Again, MP tasks don't need to do this.
+        self.sync('after clear')
+
+    def sync_before_timing_loop(self, name):
+        # syncing here, before actually beginning our loops, ensures
+        # that no client gets into a CPU intensive loop while other
+        # clients have yielded to the network (released the GIL for
+        # socket writes, or protocol processing, or switched to
+        # another greenlet).
+        self.sync(name)
 
     def _clear_all_caches(self, db):
         # Clear all caches, returns how long that took.
@@ -394,6 +437,8 @@ class SpeedTestWorker(object):
 
     @_inner_loops
     def bench_add(self, loops, db_factory):
+        self.zap_database(db_factory)
+
         db = db_factory()
         duration = 0
 
@@ -536,11 +581,7 @@ class SpeedTestWorker(object):
         # machinery.
         got = 0
         m = self.data.data_for_worker(root, self)
-        # syncing here, before actually beginning our loops, ensures
-        # that no client gets into a CPU intensive loop while other
-        # clients have yielded to the network. This matters for
-        # cooperative multi-tasking (gevent).
-        self.sync('begin steamin')
+        self.sync_before_timing_loop('steamin')
         begin = perf_counter()
         for _ in range(loops):
             for _ in range(self.inner_loops):
@@ -571,7 +612,7 @@ class SpeedTestWorker(object):
             # objects_per_txn * loops below.)
             conn.cacheMinimize()
             # As for 'steamin', sync before looping.
-            self.sync('begin hot ' + str(i))
+            self.sync_before_timing_loop('begin hot ' + str(i))
             m = self.data.data_for_worker(root, self)
             begin = perf_counter()
             got += self.data.read_test_read_values(itervalues(m))
@@ -584,3 +625,24 @@ class SpeedTestWorker(object):
         conn.close()
         db.close()
         return duration
+
+
+class ForkedSpeedTestWorker(SpeedTestWorker):
+    # Used when concurrency is achieved through multiple
+    # processes, with unique DB objects.
+
+    # Most syncs are no-ops because no objects or locks are shared,
+    # but zapping the database does need synchronization because the
+    # database is shared externally.
+
+    def should_clear_all_caches(self):
+        return True
+
+    def sync_before_clear_caches(self):
+        pass
+
+    def sync_after_clear_caches(self):
+        pass
+
+    def sync_before_timing_loop(self, name):
+        pass

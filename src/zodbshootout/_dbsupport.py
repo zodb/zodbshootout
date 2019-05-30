@@ -91,6 +91,7 @@ class BenchmarkDBFactory(object):
 
     def _zap_all(self):
         if not self.can_zap:
+            logger.debug("Not asked to zap %s", self.name)
             return
 
         db = self.factory.open()
@@ -101,8 +102,10 @@ class BenchmarkDBFactory(object):
             zap = db.storage.cleanup
             db.close()
         if zap is not None:
-            logger.info("Zapping database %s using %s", db, zap)
+            logger.debug("Zapping database %s using %s", db, zap)
             zap()
+        else:
+            logger.debug("No way to zap database %s", self.name)
         db.close()
 
     def __repr__(self):

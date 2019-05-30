@@ -50,6 +50,12 @@
 - Add an option to test the performance of blob storage. See
   :issue:`29`.
 - Add support for zapping file storages. See :issue:`43`.
+- When zapping, do so right before running the 'add' benchmark. This
+  ensures that the databases are all the same size even when the same
+  underlying storage (e.g., MySQL databas) is used multiple times in a
+  configuration. Previously, the second and further uses of the same
+  storage would not be zapped and so would grow with the data from the
+  previous contender tests. See :issue:`42`.
 
 0.6.0 (2016-12-13)
 ==================

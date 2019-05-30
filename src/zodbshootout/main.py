@@ -21,13 +21,37 @@ import sys
 
 from ._pobject import pobject_base_size
 
-class ZapAction(argparse.Action):
 
+if str is not bytes:
+    ask = input
+else:
+    ask = raw_input # pylint:disable=undefined-variable
+
+class ContainsAll(object):
+
+    def __contains__(self, name):
+        return True
+
+class ContainsIfPrompted(object):
+
+    def __contains__(self, name):
+        prompt = "Really destroy all data in %s? [yN] " % name
+        resp = ask(prompt)
+        return resp in 'yY'
+
+
+class ZapAction(argparse.Action):
+    # Store an object that responds to "in" for the database name.
+    # This will later be replaced with a list of database names
     def __call__(self, parser, namespace, values, option_string=None):
         if values == 'force':
-            setattr(namespace, self.dest, 'force')
+            setattr(namespace, self.dest, ContainsAll())
+        elif not values:
+            # No argument given
+            setattr(namespace, self.dest, ContainsIfPrompted())
         else:
-            setattr(namespace, self.dest, True)
+            setattr(namespace, self.dest, values.split(','))
+
 
 def main(argv=None): # pylint:disable=too-many-statements
     if argv is None:
@@ -73,7 +97,9 @@ def main(argv=None): # pylint:disable=too-many-statements
         if not args.include_mapping:
             cmd.extend(('--include-mapping', "false"))
         if args.log:
-            cmd.extend(('--log', options.log))
+            cmd.extend(('--log', args.log))
+        if args.zap:
+            cmd.extend(('--zap', ','.join(args.zap)))
         cmd.extend(env_options)
         cmd.append(args.config_file.name)
         cmd.extend(args.benchmarks)
@@ -107,11 +133,17 @@ def main(argv=None): # pylint:disable=too-many-statements
         help="Use BTrees. An argument, if given, is the family name to use, either IO or OO."
         " Specifying --btrees by itself will use an IO BTree; not specifying it will use PersistentMapping."
     )
+    # This becomes a list of database names to zap. Empty means zap nothing,
+    # something besides a list means we need to prompt the user and replace the object
+    # with the list they agreed to.
     obj_group.add_argument(
         "--zap", action=ZapAction,
-        default=False,
+        default=[],
         nargs='?',
         help="Zap the entire RelStorage before running tests. This will destroy all data. "
+        "An argument of 'force' does this without prompting for all databases.  "
+        "An argument that is a comma-separated list of databases will zap those database "
+        "without prompting."
     )
     obj_group.add_argument(
         "--min-objects", dest="min_object_count",
@@ -205,6 +237,17 @@ def main(argv=None): # pylint:disable=too-many-statements
         lvl_map = getattr(logging, '_nameToLevel', None) or getattr(logging, '_levelNames', {})
         logging.basicConfig(level=lvl_map.get(options.log, logging.INFO),
                             format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
+
+    from ._dbsupport import get_databases_from_conf_file
+    databases = get_databases_from_conf_file(options.config_file)
+    # TODO: Allow filtering the list of databases on the command line.
+    options.databases = databases
+    if not isinstance(options.zap, list):
+        zappable = [db_factory.name
+                    for db_factory in databases
+                    if db_factory.name in options.zap]
+        options.zap = zappable
+
 
     from ._runner import run_with_options
     run_with_options(runner, options)

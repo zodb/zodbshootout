@@ -31,22 +31,15 @@ from zope.interface import implementer
 
 from .interfaces import IDBBenchmark
 
-from ._dbsupport import get_databases_from_conf_file
 from ._dbsupport import BenchmarkDBFactory
 from ._dbsupport import MappingFactory
 
 from .speedtest import SpeedTestData
 from .speedtest import SpeedTestWorker
+from .speedtest import ForkedSpeedTestWorker
 from .speedtest import pobject_base_size
 
 from six import PY3
-
-
-if PY3:
-    ask = input
-else:
-    ask = raw_input # pylint:disable=undefined-variable
-
 
 logger = __import__('logging').getLogger(__name__)
 
@@ -77,13 +70,7 @@ def _make_leak_check(options):
 
     return prep_leaks, show_leaks
 
-def _can_zap(zodb_factory, force=False):
-    if force:
-        return True
 
-    prompt = "Really destroy all data in %s? [yN] " % zodb_factory.name
-    resp = ask(prompt)
-    return resp in 'yY'
 
 def run_with_options(runner, options):
     # Do the gevent stuff ASAP
@@ -113,11 +100,9 @@ def run_with_options(runner, options):
     if options.zap and not will_run_add():
         raise Exception("Cannot zap if you're not adding")
 
-    print(options.config_file)
-    config_databases = get_databases_from_conf_file(options.config_file)
     contenders = []
-    for db_factory in config_databases:
-        can_zap = options.zap and _can_zap(db_factory, force=options.zap == 'force')
+    for db_factory in options.databases:
+        can_zap = db_factory.name in options.zap
         factory = BenchmarkDBFactory(db_factory, objects_per_txn, concurrency,
                                      can_zap=can_zap)
         contenders.append((db_factory.name, factory))
@@ -137,14 +122,6 @@ def run_with_options(runner, options):
         contenders.insert(0, ('mapping',
                               BenchmarkDBFactory(MappingFactory(concurrency, data),
                                                  objects_per_txn, concurrency)))
-
-
-    # TODO: Move this to the first run of each contender so we always
-    # zap even if we share the backing database between contenders.
-    for _, factory in contenders:
-        db = factory.open()
-        db.close()
-        db.speedtest_zap_all()
 
 
     # For concurrency of 1, or if we're using forked concurrency, we
@@ -182,11 +159,6 @@ def run_with_options(runner, options):
             'objects_per_txn': objects_per_txn,
         }
         # TODO: Include the gevent loop implementation in the metadata.
-
-        if not options.worker and will_run_add():
-            # I'm the master process. Only do this (which resets everything)
-            # if we're going to run the add benchmark.
-            data.populate(db_factory)
 
         db_benchmarks = {}
         # TODO: Where to include leak prints?
@@ -383,17 +355,39 @@ class SharedDBFunction(object):
         return getattr(self.inner, name)
 
     def __call__(self, loops, db_factory):
-        orig_db_factory = db_factory
-        db = db_factory()
-        db.setPoolSize(self.inner.concurrency)
-        close = db.close
-        db.close = lambda: None
-        db_factory = lambda: db
-        db_factory.name = orig_db_factory.name
+        class DbAndClose(object):
+            factory = db_factory
+            def __init__(self):
+                self.name = self.factory.name
+                self.db = None
+                self.reset()
+
+            def reset(self):
+                self.db = db = self.factory()
+                db.close = lambda: None
+                speedtest_zap_all = db.speedtest_zap_all
+                def shared_zap():
+                    self.close()
+                    speedtest_zap_all()
+                    self.reset()
+                db.speedtest_zap_all = shared_zap
+
+            def close(self):
+                if self.db is not None:
+                    db = self.db
+                    self.db = None
+
+                    del db.close
+                    db.close()
+
+            def __call__(self):
+                return self.db
+
+        db_and_close = DbAndClose()
         try:
-            return self.inner(loops, db_factory)
+            return self.inner(loops, db_and_close)
         finally:
-            close()
+            db_and_close.close()
 
 
 class ThreadedRunner(AbstractWrappingRunner):
@@ -470,11 +464,7 @@ class GeventProfiledFunction(object):
                 st.print_stats()
 
 
-class ForkedWorker(SpeedTestWorker):
-
-    def should_clear_all_caches(self):
-        return True
 
 class ForkedRunner(ThreadedRunner):
     mp_strategy = 'mp'
-    WorkerClass = ForkedWorker
+    WorkerClass = ForkedSpeedTestWorker

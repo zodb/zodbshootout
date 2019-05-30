@@ -145,23 +145,17 @@ class Child(object):
 
     def sync(self, name):
         self.parent_queue.put((self.child_num, 'sync', name))
-        resume_time = self.child_queue.get()
-        now = time.time()
-        if now > resume_time:
-            raise AssertionError(
-                "Resume time has already passed (%fs too late). Consider "
-                "increasing 'MESSAGE_DELAY', which is currently set to %f."
-                % (now - resume_time, MESSAGE_DELAY))
-        # sleep until the resume time is near
-        delay = resume_time - time.time() - 0.1
-        if delay > 0:
-            time.sleep(delay)
-        # get as close as we can to the exact resume time
-        while time.time() < resume_time:
-            # On CPython, this uses a system call (select() on unix),
-            # and does so while allowing threads and interrupts. In
-            # gevent, it lets the loop cycle.
-            time.sleep(0.0001)
+        self.child_queue.get()
+        # Previously, we tried to wait to resume until a specific
+        # time. The idea being to try to maximize the actual
+        # concurrency. But now that the benchmarks are shorter and
+        # under the control of pyperf, we just wind up spending lots
+        # of time sleeping. And we don't really use sync in the same
+        # way anymore (to control concurrency; now we just use it to
+        # prevent errors for things like zapping the database and
+        # otherwise making sure something only gets done once), so
+        # it's fine to let children resume as soon as they get the
+        # message. That's what the threaded implementation does.
 
     def __str__(self):
         return "%s(%s)" % (self.__class__.__name__,
@@ -330,11 +324,6 @@ def distribute(func, param_iter, strategy='mp',
     child_factory = Child
     if strategy == 'threads':
         child_factory = ThreadedChild
-    else:
-        # MP is no longer needing to sync because
-        # we don't do phases at the child level anymore, it's
-        # higher.
-        child_factory = SynclessChild
 
     for child_num, param in enumerate(param_iter):
         child = child_factory(child_num, parent_queue, func, param, Process, Queue)
