@@ -72,6 +72,19 @@ class ExceptionInChildError(ChildProcessError):
     """
 
 
+class _Unwrapper(object):
+
+    def __init__(self, func):
+        self.func = func
+
+    def __call__(self, param, sync):
+        args, kwargs = param
+        return self.func(*args, **kwargs)
+
+    def __repr__(self):
+        return repr(self.func)
+
+
 def run_in_child(func, strategy, *args, **kwargs):
     """
     Call a function in a child process.
@@ -80,14 +93,7 @@ def run_in_child(func, strategy, *args, **kwargs):
 
     :return: Whatever the function returned.
     """
-
-    Process, Queue = strategies[strategy]
-
-    queue = Queue()
-
-    child = SynclessChild(queue, func, Process, args, kwargs)
-
-    return _poll_children(queue, {child.child_num: child})[0]
+    return distribute(_Unwrapper(func), [(args, kwargs)], strategy)[0]
 
 
 class Child(object):
@@ -98,6 +104,9 @@ class Child(object):
         self.func = func
         self.param = param
         self.process = Process(target=self.run)
+        if hasattr(self.process, 'name'):
+            self.process.name = 'Child %s (%r)' % (self.child_num, self.func)
+
         self.child_queue = Queue()
 
     def _execute_func(self):
@@ -155,7 +164,8 @@ class Child(object):
             time.sleep(0.0001)
 
     def __str__(self):
-        return "Child(%s)" % (self.child_num,)
+        return "%s(%s)" % (self.__class__.__name__,
+                           getattr(self.process, 'name', self.child_num))
 
 
 class SynclessChild(Child):
@@ -279,6 +289,8 @@ def _poll_children(parent_queue, children, before_poll=lambda: None):
             parent_queue.cancel_join_thread()
 
         for child in children.values():
+            # multiprocess children can be forcibly killed,
+            # threads cannot. (greenlets could)
             if hasattr(child.process, 'terminate'):
                 child.process.terminate()
             child.process.join(1)

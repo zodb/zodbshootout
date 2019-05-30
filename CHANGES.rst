@@ -5,6 +5,8 @@
 0.7.0 (unreleased)
 ==================
 
+- Drop support for Python 3.4.
+- Add support for Python 3.7.
 - The timing loops have been rewritten on top of `pyperf
   <https://pyperf.readthedocs.io/en/latest/index.html>`_. This
   produces much more reliable/stable, meaningful data with a richer set of

@@ -44,7 +44,9 @@ def main(argv=None): # pylint:disable=too-many-statements
     import os
     env_options = ['--inherit-environ',
                    ','.join([k for k in os.environ
-                             if k.startswith('GEVENT') or k.startswith('PYTHON')])]
+                             if k.startswith(('GEVENT',
+                                              'PYTHON',
+                                              'COVERAGE'))])]
     argv.extend(env_options)
 
 

@@ -37,6 +37,7 @@ def func_that_sleeps(*_args):
     _is_sleeping = True
     while _should_sleep:
         time.sleep(0.5)
+    _is_sleeping = False
 
 class ForkTestMixin(object):
 
@@ -88,17 +89,19 @@ class ForkTestMixin(object):
             os.kill(os.getpid(), signal.SIGINT)
 
         sig_thread = threading.Thread(target=background)
+        sig_thread.name = 'SignalThread'
 
-        self.assertRaises(KeyboardInterrupt,
-                          fork.distribute,
-                          func_that_sleeps,
-                          [None],
-                          strategy=self.strategy,
-                          before_poll=sig_thread.start)
+        with self.assertRaises(KeyboardInterrupt):
+            fork.distribute(func_that_sleeps,
+                            [None],
+                            strategy=self.strategy,
+                            before_poll=sig_thread.start)
 
-        if _is_sleeping:
+        # If we ran the thread in process, wait for it to die.
+        while _is_sleeping:
             _should_sleep = False
-            _is_sleeping = False
+            time.sleep(0.0001)
+
 
 
 class TestThreadFork(ForkTestMixin, unittest.TestCase):

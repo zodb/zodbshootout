@@ -27,7 +27,7 @@ install_requires = [
 ]
 
 tests_require = [
-
+    'zope.testrunner',
 ]
 
 def read_file(*path):
@@ -57,7 +57,6 @@ setup(
     zip_safe=False,
     install_requires=install_requires,
     tests_require=tests_require,
-    test_suite='zodbshootout.tests',
     entry_points={
         'console_scripts': [
             'zodbshootout = zodbshootout.main:main',
