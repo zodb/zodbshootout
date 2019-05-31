@@ -180,9 +180,10 @@ def run_with_options(runner, options):
 
     # In the master, go ahead and open each database; we don't want to discover
     # a problem half-way through the run. Also, this helps with leak checks.
-    for factory in contenders:
-        db = factory.open()
-        db.close()
+    if not options.worker:
+        for factory in contenders:
+            db = factory.open()
+            db.close()
 
     for db_factory in contenders:
         _run_benchmarks_for_contender(runner, options, data, db_factory)
