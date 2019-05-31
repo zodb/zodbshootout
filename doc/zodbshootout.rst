@@ -42,23 +42,18 @@ but both forms are equivalent.
 Configuration File
 ==================
 
-.. caution::
-
-   ``zodbshootout`` packs each of the databases specified in
-   the configuration file. This results in the permanent deletion of
-   historical revisions, and if the database is a part of a
-   multi-database (mount points) could result in
-   :exc:`~ZODB.POSException.POSKeyError` and broken links. Do not
-   configure it to open production databases!
 
 The ``zodbshootout`` script requires the name of a database
 configuration file. The configuration file contains a list of
-databases to test, in ZConfig format. The script packs each of the
-databases, then writes and reads the databases while taking
-measurements. Finally, the script produces a tabular summary of
-objects written or read per second in each configuration.
-``zodbshootout`` uses the names of the databases defined in the
-configuration file as the table column names.
+databases to test, in ZConfig format. The script then writes and reads
+each of the databases while taking measurements. During this process,
+the measured times are output for each test of each database; there
+are a number of command-line options to control the output or save it
+to files for later analysis. (See the `pyperf user guide
+<https://pyperf.readthedocs.io/en/latest/user_guide.html>`_ for
+information on configuring the output and adjusting the benchmark
+process.)
+
 
 .. highlight:: xml
 
@@ -93,19 +88,28 @@ description of each option follows the text output.
 
 .. command-output:: zodbshootout --help
 
+.. versionchanged:: 0.7
+   You can now specify just a subset of benchmarks to run
+   by giving their names as extra command line arguments after the
+   configuration file.
+
 Objects
 -------
 
 These options control the objects put in the database.
 
-* ``-n`` (``--object-counts``) specifies how many persistent objects to
-  write or read per transaction. The default is 1000. An interesting
-  value to use is 1, causing the test to primarily measure the speed of
-  opening connections and committing transactions.
+* ``--object-counts`` specifies how many persistent objects to
+  write or read per transaction. The default is 1000.
+
+  .. versionchanged:: 0.7
+     The old alias of ``-n`` is no longer accepted; pyperf uses that
+     to determine the number of loop iterations.
+
+     Also, this can now only be used once.
 
   .. versionchanged:: 0.6
-                      Specify this option more than once to run the
-                      tests with different object counts.
+     Specify this option more than once to run the
+     tests with different object counts.
 
 
 * ``--btrees`` causes the data to be stored in the BTrees optimized
@@ -123,13 +127,19 @@ These options control the objects put in the database.
 
   .. versionadded:: 0.6
 
-* ``--zap`` recreates the tables and indexes for a RelStorage
-  database. *This option completely destroys any existing data.* You
-  will be prompted to confirm that you want to do this for each
-  database that supports it. This is handy for comparing Python 2 and
-  Python 3 (which can't otherwise use the same database schemas).
+* ``--zap`` recreates the tables and indexes for a RelStorage database
+  or a ZODB FileStorage. *This option completely destroys any existing
+  data.* You will be prompted to confirm that you want to do this for
+  each database that supports it. This is handy for comparing Python 2
+  and Python 3 (which can't otherwise use the same database schemas).
 
   .. caution:: This option destroys all data in the relevant database.
+
+  .. versionchanged:: 0.7
+     You can now specify an argument of ``force`` to disable the
+     prompt and zap all databases. You can also give a comma separated
+     list of database names to zap; only those databases will be
+     cleared (without prompting).
 
   .. versionadded:: 0.6
 
@@ -167,9 +177,12 @@ These options control the concurrency of the testing.
   number of CPU cores in the computer. In more complex configurations,
   performance will be limited by other factors such as network latency.
 
+  .. versionchanged:: 0.7
+     This option can only be used once.
+
   .. versionchanged:: 0.6
-                      Specify this option more than once to run the
-                      tests with different concurrency levels.
+     Specify this option more than once to run the
+     tests with different concurrency levels.
 
 * ``--threads`` uses in-process threads for concurrency instead of
   multiprocessing. This can demonstrate how the GIL affects various
@@ -209,18 +222,11 @@ Repetitions
 
 These options control how many times tests are repeated.
 
-* ``-r`` (``--repetitions``) determines how many iterations of the
-  complete test suite will be compared together to find the best time. Higher
-  values can reduce jitter. Higher values are especially useful on
-  platforms that have a warmup period (like PyPy's JIT). The default
-  is 3.
+.. versionchanged:: 0.7
 
-  .. versionadded:: 0.6
-
-* ``--test-reps`` determines how many times each individual test (such
-  as add/update/cold/warm) will be repeated.
-
-  .. versionadded:: 0.6
+   The old ``-r`` and ``--test-reps`` options were removed. Instead,
+   use the ``--loops``, ``--values`` and ``--processes`` options
+   provided by pyperf.
 
 
 Profiling
@@ -238,6 +244,9 @@ Profiling
 * ``--leaks`` prints a summary of possibly leaking objects after each
   test repetition. This is useful for storage and ZODB developers.
 
+  .. versionchanged:: 0.7
+     The old ``-l`` alias is no longer accepted.
+
   .. versionadded:: 0.6
 
 Output
@@ -245,19 +254,21 @@ Output
 
 These options control the output produced.
 
+.. versionchanged:: 0.7
+
+   The ``--dump-json`` argument was removed in favor of pyperf's
+   native output format, which enables much better analysis using
+   ``pyperf show``.
+
+   If the ``-o`` argument is specified, then in addition to creating a
+   single file containing all the test runs, a file will be created
+   for each database, allowing for direct comparisons using pyperf's
+   ``compare_to`` command.
+
 * ``--log`` enables logging to the console at the specified level. If
   no level is specified but this option is given, then INFO logging
   will be enabled. This is useful for details about the workings of a
   storage and the effects various options have on it.
-
-  .. versionadded:: 0.6
-
-
-* ``--dump-json`` writes a JSON structure containing the raw data
-  collected to the file given (or if no file is given, to stdout).
-  This can be useful for doing a more sophisticated analysis.
-
-  .. note:: The JSON structure is subject to change at any time.
 
   .. versionadded:: 0.6
 

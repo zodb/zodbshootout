@@ -28,12 +28,14 @@ from .interfaces import IDBBenchmarkCollectionWrapper
 from .speedtest import SpeedTestWorker
 from .speedtest import ForkedSpeedTestWorker
 from ._dbsupport import SharedDBFunction
+from ._wrapper import AbstractWrapper
 from ._wrapper import AbstractBenchmarkFunctionWrapper
+from .fork import distribute
 
 logger = __import__('logging').getLogger(__name__)
 
 @implementer(IDBBenchmark)
-class AbstractConcurrentFunction(object):
+class AbstractConcurrentFunction(AbstractWrapper):
     """
     Run a benchmark function concurrently across a set of workers and
     return the results.
@@ -57,7 +59,6 @@ class AbstractConcurrentFunction(object):
         return getattr(self.__wrapped__, name)
 
     def _distribute(self, func, arg_iter):
-        from .fork import distribute
         return distribute(func, arg_iter, self.mp_strategy)
 
     def __call__(self, loops, db_factory):

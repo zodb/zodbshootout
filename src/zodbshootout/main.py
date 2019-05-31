@@ -71,7 +71,8 @@ def main(argv=None): # pylint:disable=too-many-statements
                              if k.startswith(('GEVENT',
                                               'PYTHON',
                                               'COVERAGE'))])]
-    argv.extend(env_options)
+    # This is a default, so put it early
+    argv[0:0] = env_options
 
     def worker_args(cmd, args):
         # Sadly, we have to manually put arguments that mean something to children
@@ -99,6 +100,8 @@ def main(argv=None): # pylint:disable=too-many-statements
             cmd.extend(('--log', args.log))
         if args.zap:
             cmd.extend(('--zap', ','.join(args.zap)))
+        if args.leaks:
+            cmd.extend(('--leaks',))
         cmd.extend(('--profiler', args.profiler))
         cmd.extend(env_options)
         cmd.append(args.config_file.name)
@@ -221,10 +224,11 @@ def main(argv=None): # pylint:disable=too-many-statements
         "Default is true; use any value besides 'true', 'yes' or 'on' "
         "to disable."
     )
-    # prof_group.add_argument(
-    #     "-l", "--leaks", dest='leaks', action='store_true', default=False,
-    #     help="Check for object leaks after every repetition. This only makes sense with --threads"
-    # )
+
+    prof_group.add_argument(
+        "--leaks", dest='leaks', action='store_true', default=False,
+        help="Check for object leaks after every repetition. This only makes sense with --threads"
+    )
 
     parser.add_argument("config_file", type=argparse.FileType())
     parser.add_argument('benchmarks',
@@ -265,6 +269,11 @@ def main(argv=None): # pylint:disable=too-many-statements
                     if db_factory.name in options.zap]
         options.zap = zappable
 
+    if options.leaks and not options.threads:
+        sys.exit("Can only use leak checking in threaded mode.")
+
+    if options.zap and 'add' not in options.benchmarks:
+        sys.exit("Cannot zap if you're not adding")
 
     from ._runner import run_with_options
     run_with_options(runner, options)

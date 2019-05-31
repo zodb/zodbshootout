@@ -26,6 +26,9 @@ import os
 from pyperf import Benchmark
 from pyperf import BenchmarkSuite
 
+from zope.interface import implementer
+
+from .interfaces import IDBBenchmark
 
 from ._dbsupport import BenchmarkDBFactory
 from ._dbsupport import MappingFactory
@@ -42,9 +45,13 @@ from six import PY3
 
 logger = __import__('logging').getLogger(__name__)
 
-def _make_leak_check(options):
-    if not options.leaks:
-        return lambda: None, lambda: None
+def _setup_leaks(options, speedtest):
+    if not options.leaks or not options.worker:
+        return
+
+    assert options.threads
+    # Like profiling, do this once around all the distributions,
+    # but in the workers, not the master.
 
     if PY3:
         from io import StringIO as SIO
@@ -53,21 +60,45 @@ def _make_leak_check(options):
 
     import objgraph
     import gc
-    def prep_leaks():
-        gc.collect()
-        objgraph.show_growth(file=SIO())
+    from ._wrapper import AbstractWrapper
 
-    def show_leaks():
-        gc.collect()
-        gc.collect()
-        sio = SIO()
-        objgraph.show_growth(file=sio)
-        if sio.getvalue():
-            print("    Memory Growth")
-            for line in sio.getvalue().split('\n'):
-                print("    ", line)
+    class LeakWrapperFactory(object):
+        def __init__(self, inner):
+            self.inner = inner
 
-    return prep_leaks, show_leaks
+        def __call__(self, func_name):
+            return LeakWrapper(self.inner(func_name))
+
+    @implementer(IDBBenchmark)
+    class LeakWrapper(AbstractWrapper):
+        def __init__(self, inner):
+            self.__wrapped__ = inner
+            self.should_show = False
+
+        def __getattr__(self, name):
+            return getattr(self.__wrapped__, name)
+
+        def __call__(self, loops, db_factory):
+            gc.collect()
+            objgraph.show_growth(file=SIO())
+            try:
+                return self.__wrapped__(loops, db_factory)
+            finally:
+                gc.collect()
+                gc.collect()
+                sio = SIO()
+                objgraph.show_growth(file=sio)
+                if not self.should_show:
+                    # The first time through is a freebie. There's
+                    # probably still lots of importing and caching going on.
+                    self.should_show = True
+                elif sio.getvalue():
+                    print("    Memory Growth")
+                    for line in sio.getvalue().split('\n'):
+                        print("    ", line)
+
+    speedtest.make_function_wrapper = LeakWrapperFactory(speedtest.make_function_wrapper)
+
 
 def _setup_profiling(options, speedtest):
     if not options.profile_dir:
@@ -124,8 +155,6 @@ def run_with_options(runner, options):
     concurrency = options.concurrency
     object_size = max(options.object_size, pobject_base_size)
 
-    if options.zap and 'add' not in options.benchmarks:
-        raise Exception("Cannot zap if you're not adding")
 
     contenders = []
     for db_factory in options.databases:
@@ -149,8 +178,15 @@ def run_with_options(runner, options):
         contenders.insert(0, BenchmarkDBFactory(MappingFactory(concurrency, data),
                                                 objects_per_txn, concurrency))
 
+    # In the master, go ahead and open each database; we don't want to discover
+    # a problem half-way through the run. Also, this helps with leak checks.
+    for factory in contenders:
+        db = factory.open()
+        db.close()
+
     for db_factory in contenders:
         _run_benchmarks_for_contender(runner, options, data, db_factory)
+
 
 def _create_speedtest(options, data):
     # For concurrency of 1, or if we're using forked concurrency, we
@@ -173,6 +209,7 @@ def _create_speedtest(options, data):
             runner_kind = ForkedConcurrentBenchmarkCollection
     speedtest = runner_kind(data, options)
     _setup_profiling(options, speedtest)
+    _setup_leaks(options, speedtest)
     return speedtest
 
 def _run_benchmarks_for_contender(runner, options, data, db_factory):
@@ -217,7 +254,9 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
             inner_loops=inner_loops,
             metadata=metadata,
         )
+
         db_benchmarks[bench_opt_name] = benchmark
+
     _combine_benchmark_results(options, db_factory, db_benchmarks)
 
 def _combine_benchmark_results(options, db_factory, db_benchmarks):

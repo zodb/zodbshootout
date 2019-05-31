@@ -118,6 +118,9 @@ class TestMain(unittest.TestCase):
 
         self._run()
 
+    def test_leaks(self):
+        self.args = ('--threads', '--leaks')
+        self._run()
 
     def test_forked_concurrency_with_profile(self):
         threads = '--threads' in self.args

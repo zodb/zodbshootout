@@ -12,12 +12,22 @@ from zope.interface import implementer
 
 from .interfaces import IDBBenchmarkCollectionWrapper
 
+class AbstractWrapper(object):
+    __wrapped__ = None
+
+    def __repr__(self):
+        return "<%s at %x around %r>" % (type(self).__name__, id(self), self.__wrapped__)
+
 @implementer(IDBBenchmarkCollectionWrapper)
 class AbstractBenchmarkFunctionWrapper(object):
     """
     Applies a wrapper to each benchmark function.
     """
     delegate = None
+
+    @property
+    def __wrapped__(self):
+        return self.delegate
 
     def __getattr__(self, name):
         if name.startswith("bench_"):

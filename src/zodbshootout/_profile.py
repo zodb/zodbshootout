@@ -18,6 +18,7 @@ from pstats import Stats as CStats
 from zope.interface import implementer
 
 from .interfaces import IDBBenchmark
+from ._wrapper import AbstractWrapper
 
 # The cProfile profiler needs to be enabled in each native thread
 # that we want to profile. A single profile object can be enabled
@@ -203,7 +204,7 @@ class ProfiledFunctionFactory(object):
                                 func_name)
 
 @implementer(IDBBenchmark)
-class ProfiledFunction(object):
+class ProfiledFunction(AbstractWrapper):
     """
     A function wrapper that installs a profiler around the execution
     of the (distributed) functions.
@@ -218,15 +219,15 @@ class ProfiledFunction(object):
 
     def __init__(self, profile_dir, profile_kind, inner_kind, func_name):
         self.profile_dir = profile_dir
-        self.inner = inner_kind(func_name)
+        self.__wrapped__ = inner_kind(func_name)
         self.profiler = profile_kind(profile_dir, func_name)
 
     def __getattr__(self, name):
-        return getattr(self.inner, name)
+        return getattr(self.__wrapped__, name)
 
     def __call__(self, loops, db_factory):
         # We're trying to capture profiling from all the warmup runs, etc,
         # since that all takes much longer.
         self.profiler.db_name = db_factory.name
         with self.profiler:
-            return self.inner(loops, db_factory)
+            return self.__wrapped__(loops, db_factory)

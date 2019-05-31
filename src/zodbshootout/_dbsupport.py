@@ -20,6 +20,8 @@ from .interfaces import IBenchmarkDatabase
 from .interfaces import IDBFactory
 from .interfaces import IDBBenchmark
 
+from ._wrapper import AbstractWrapper
+
 NativeStringIO = BytesIO if bytes is str else StringIO
 
 logger = __import__('logging').getLogger(__name__)
@@ -143,7 +145,7 @@ class MappingFactory(object):
 
 
 @implementer(IDBBenchmark)
-class SharedDBFunction(object):
+class SharedDBFunction(AbstractWrapper):
     """
     A wrapper that ensures that the inner function always gets
     the same database object, no matter how many times the
