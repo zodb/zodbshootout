@@ -18,6 +18,7 @@ from zope.interface import alsoProvides
 from .interfaces import IBenchmarkDBFactory
 from .interfaces import IBenchmarkDatabase
 from .interfaces import IDBFactory
+from .interfaces import IDBBenchmark
 
 NativeStringIO = BytesIO if bytes is str else StringIO
 
@@ -139,3 +140,60 @@ class MappingFactory(object):
         return db
 
     __call__ = open
+
+
+@implementer(IDBBenchmark)
+class SharedDBFunction(object):
+    """
+    A wrapper that ensures that the inner function always gets
+    the same database object, no matter how many times the
+    factory is invoked.
+    """
+
+    def __init__(self, function):
+        self.__wrapped__ = function
+
+    def __getattr__(self, name):
+        return getattr(self.__wrapped__, name)
+
+    @implementer(IBenchmarkDBFactory)
+    class SharedDBFactory(object):
+        def __init__(self, db_factory):
+            from threading import RLock
+            self.lock = RLock()
+            self.factory = db_factory
+            self.name = self.factory.name
+            self.db = None
+            self.reset()
+
+        def reset(self):
+            with self.lock:
+                self.db = db = self.factory()
+                db.close = lambda: None
+                speedtest_zap_all = db.speedtest_zap_all
+                def shared_zap():
+                    with self.lock:
+                        self.close()
+                        speedtest_zap_all()
+                        self.reset()
+                db.speedtest_zap_all = shared_zap
+
+        def close(self):
+            with self.lock:
+                if self.db is not None:
+                    db = self.db
+                    self.db = None
+
+                    del db.close
+                    db.close()
+
+        def __call__(self):
+            with self.lock:
+                return self.db
+
+    def __call__(self, loops, db_factory):
+        db_and_close = self.SharedDBFactory(db_factory)
+        try:
+            return self.__wrapped__(loops, db_and_close)
+        finally:
+            db_and_close.close()

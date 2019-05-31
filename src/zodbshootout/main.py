@@ -73,13 +73,12 @@ def main(argv=None): # pylint:disable=too-many-statements
                                               'COVERAGE'))])]
     argv.extend(env_options)
 
-
     def worker_args(cmd, args):
         # Sadly, we have to manually put arguments that mean something to children
         # back on. There's no easy 'unparse' we can use. Some of the options for
         # pyperf, if we duplicate in the children, lead to errors (such as -o)
-        if args.counts:
-            cmd.extend(('--object-counts', str(args.counts)))
+        if args.objects_per_txn:
+            cmd.extend(('--object-counts', str(args.objects_per_txn)))
         if args.object_size:
             cmd.extend(('--object-size', str(args.object_size)))
         if args.btrees:
@@ -108,7 +107,7 @@ def main(argv=None): # pylint:disable=too-many-statements
 
     # pyperf uses subprocess,s make sure it's gevent patched too.
     from pyperf import Runner
-    runner = Runner(add_cmdline_args=worker_args)
+    runner = Runner(add_cmdline_args=worker_args, program_args=('-m', 'zodbshootout'))
     parser = runner.argparser
     prof_group = parser.add_argument_group("Profiling", "Control over profiling the database")
     obj_group = parser.add_argument_group("Objects", "Control the objects put in ZODB")
@@ -117,7 +116,7 @@ def main(argv=None): # pylint:disable=too-many-statements
 
     # Objects
     obj_group.add_argument(
-        "--object-counts", dest="counts",
+        "--object-counts", dest="objects_per_txn",
         type=int,
         nargs="?",
         default=1000,

@@ -11,6 +11,7 @@ from __future__ import print_function
 logger = __import__('logging').getLogger(__name__)
 
 import os.path
+import shutil
 from cProfile import Profile as CProfile
 from pstats import Stats as CStats
 
@@ -43,7 +44,7 @@ class AbstractProfiler(object):
     def __init__(self, profile_dir, func_name):
         self.profile_dir = profile_dir
         self.func_name = func_name
-        self.db_name = ''
+        self.db_name = 'unknown'
 
     def __enter__(self):
         self._do_enter()
@@ -57,11 +58,22 @@ class AbstractProfiler(object):
 
     def generate_file_names(self):
         tid = self.get_thread_id_for_filename()
-        db_name = '_' + self.db_name if self.db_name else ''
-        basename = "%s_%s_%s%s" % (self.func_name, os.getpid(), tid, db_name)
+        db_name = self.db_name
+        func = self.func_name[len('bench_'):]
 
-        txt_fn = os.path.join(self.profile_dir, basename + ".txt")
-        prof_fn = os.path.join(self.profile_dir, basename + self.PROF_DATA_EXT)
+        # <path>/db/add/random
+        db_dir = os.path.join(self.profile_dir, db_name)
+        bench_dir = os.path.join(db_dir, func)
+
+        try:
+            os.makedirs(bench_dir)
+        except OSError:
+            pass
+
+        basename = "%s_%s" % (os.getpid(), tid)
+
+        txt_fn = os.path.join(bench_dir, basename + ".txt")
+        prof_fn = os.path.join(bench_dir, basename + self.PROF_DATA_EXT)
         return txt_fn, prof_fn
 
     def _do_enter(self):
@@ -69,6 +81,9 @@ class AbstractProfiler(object):
 
     def _do_exit(self):
         raise NotImplementedError
+
+    def combine(self):
+        pass
 
 class CProfiler(AbstractProfiler):
 
@@ -90,6 +105,44 @@ class CProfiler(AbstractProfiler):
             st.strip_dirs()
             st.sort_stats('cumulative')
             st.print_stats()
+
+    def combine(self):
+        # Rewrite to combine things with a common prefix into a single
+        # file.
+        def dirs_only(p):
+            db_dirs = os.listdir(p)
+            db_dirs = [os.path.join(p, d) for d in db_dirs]
+            db_dirs = [d for d in db_dirs if os.path.isdir(d)]
+            return db_dirs
+
+        db_dirs = dirs_only(self.profile_dir)
+        for db_dir in db_dirs:
+            bench_dirs = dirs_only(db_dir)
+            for bench_dir in bench_dirs:
+                prof_files = [os.path.join(bench_dir, p)
+                              for p in os.listdir(bench_dir)
+                              if p.endswith('.prof')]
+
+                bench_name = os.path.basename(bench_dir)
+                db_name = os.path.basename(db_dir)
+                base_prof_name = db_name + '_' + bench_name
+
+                stats = CStats(*prof_files)
+                stats.dump_stats(os.path.join(
+                    self.profile_dir,
+                    base_prof_name + '.prof'
+                ))
+
+                txt_fn = os.path.join(
+                    self.profile_dir,
+                    base_prof_name + '.txt'
+                )
+                with open(txt_fn, 'w') as f:
+                    st = CStats(*prof_files, stream=f)
+                    st.strip_dirs()
+                    st.sort_stats('cumulative')
+                    st.print_stats()
+            shutil.rmtree(db_dir)
 
 
 class VMProfiler(AbstractProfiler):
@@ -120,7 +173,8 @@ class VMProfiler(AbstractProfiler):
             import vmprof
             _, prof_fn = self.generate_file_names()
             VMProfiler.stat_file = open(prof_fn, 'a+b')
-            vmprof.enable(VMProfiler.stat_file.fileno(), lines=True, real_time=True)
+            # real_time can break time.sleep() and it seems to hang PyPy.
+            vmprof.enable(VMProfiler.stat_file.fileno(), lines=True, real_time=False)
 
     def _do_exit(self):
         with self.counter_lock:

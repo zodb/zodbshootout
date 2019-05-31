@@ -29,6 +29,9 @@ import transaction
 from persistent.mapping import PersistentMapping
 from persistent.list import PersistentList
 
+from zope.interface import implementer
+
+from .interfaces import IDBBenchmarkCollection
 from ._pobject import pobject_base_size
 from ._pobject import PObject
 from ._pblobobject import BlobObject
@@ -223,6 +226,11 @@ def _inner_loops(f):
     f.inner_loops = True
     return f
 
+def _no_inner_loops(f):
+    f.inner_loops = False
+    return f
+
+@implementer(IDBBenchmarkCollection)
 class SpeedTestWorker(object):
     worker_number = 0
     inner_loops = 10
@@ -417,6 +425,7 @@ class SpeedTestWorker(object):
         duration = end - begin
         return duration
 
+    @_no_inner_loops
     def bench_read_after_write(self, loops, db_factory):
         # This is what used to be called the 'warm' read:
         # Read back items in the next transaction that were just written in the
@@ -532,6 +541,7 @@ class SpeedTestWorker(object):
         db.close()
         return end - begin
 
+    @_no_inner_loops
     def bench_hot_read(self, loops, db_factory):
         # In this test, we want all secondary caches to be well populated,
         # but the connection pickle cache should be empty.
@@ -562,7 +572,6 @@ class SpeedTestWorker(object):
         conn.close()
         db.close()
         return duration
-
 
     @_inner_loops
     def bench_empty_transaction_commit(self, loops, db_factory):

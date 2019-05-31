@@ -10,6 +10,7 @@ from __future__ import print_function
 import os
 import unittest
 import tempfile
+import shutil
 
 from hamcrest import assert_that
 from nti.testing.matchers import provides
@@ -36,6 +37,7 @@ class TestBenchmarkDBFactory(unittest.TestCase):
 
     def test_zap_file_storage(self):
         tempd = tempfile.mkdtemp('.zodbshootout')
+        self.addCleanup(shutil.rmtree, tempd)
         path = os.path.join(tempd, 'Data.fs')
 
         conf = """

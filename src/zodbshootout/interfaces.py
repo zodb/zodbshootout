@@ -83,3 +83,23 @@ class IDBBenchmark(Interface):
                  iterations of the benchmark, as measured using
                  `pyperf.perf_counter`.
         """
+
+
+class IDBBenchmarkCollection(Interface):
+    """
+    All the attributes of this object that begin with ``bench_``
+    are `IDBBenchmark` functions.
+    """
+
+class IDBBenchmarkCollectionWrapper(IDBBenchmarkCollection):
+    """
+    This object applies a wrapper function to each benchmark function
+    when it is accessed.
+
+    The wrapper function may be changed by assigning to ``make_function_wrapper``.
+    """
+
+    def make_function_wrapper(func_name):
+        """
+        Return an `IDBBenchmark` for the method of this object *func_name*.
+        """
