@@ -5,8 +5,9 @@
 0.7.1 (unreleased)
 ==================
 
-- Nothing changed yet.
+- Fix ``--min-objects``. Previously it did nothing.
 
+- Add ``--pack`` to pack each storage before running.
 
 0.7.0 (2019-05-31)
 ==================

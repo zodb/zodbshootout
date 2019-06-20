@@ -163,8 +163,9 @@ def run_with_options(runner, options):
                                      can_zap=can_zap)
         contenders.append(factory)
 
-    data = SpeedTestData(concurrency, objects_per_txn, object_size)
-    data.min_object_count = data.min_object_count
+    data = SpeedTestData(concurrency, objects_per_txn, object_size,
+                         pack_on_populate=options.pack_on_populate)
+    data.min_object_count = options.min_object_count
     if options.btrees:
         import BTrees
         if options.btrees == 'IO':

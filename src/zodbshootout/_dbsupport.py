@@ -98,6 +98,7 @@ class BenchmarkDBFactory(object):
             return
 
         db = self.factory.open()
+        obj_count = len(db.storage)
         zap = None
         if hasattr(db.storage, 'zap_all'):
             zap = db.storage.zap_all
@@ -105,8 +106,10 @@ class BenchmarkDBFactory(object):
             zap = db.storage.cleanup
             db.close()
         if zap is not None:
-            logger.debug("Zapping database %s using %s", db, zap)
+            logger.debug("Zapping database %s (size: %d) using %s",
+                         db, obj_count, zap)
             zap()
+            logger.debug("Done zapping database %s", db)
         else:
             logger.debug("No way to zap database %s", self.name)
         db.close()

@@ -102,6 +102,10 @@ def main(argv=None): # pylint:disable=too-many-statements
             cmd.extend(('--zap', ','.join(args.zap)))
         if args.leaks:
             cmd.extend(('--leaks',))
+        if args.min_object_count:
+            cmd.extend(('--min-objects', str(args.min_object_count)))
+        if args.pack_on_populate:
+            cmd.extend(("--pack",))
         cmd.extend(('--profiler', args.profiler))
         cmd.extend(env_options)
         cmd.append(args.config_file.name)
@@ -157,6 +161,11 @@ def main(argv=None): # pylint:disable=too-many-statements
     obj_group.add_argument(
         "--blobs", dest="use_blobs", action='store_true', default=False,
         help="Use Blobs instead of pure persistent objects."
+    )
+
+    obj_group.add_argument(
+        "--pack", dest="pack_on_populate", action='store_true', default=False,
+        help="Pack the storage before populating it."
     )
 
     # Concurrency

@@ -19,7 +19,7 @@ from __future__ import print_function, absolute_import
 # This file is imported after gevent monkey patching (if applicable)
 # so it's safe to import anything.
 import gc
-
+import functools
 import random
 
 from pyperf import perf_counter
@@ -47,6 +47,29 @@ def itervalues(d):
 
 
 random.seed(__file__) # reproducible random functions
+
+class timer(object):
+    begin = None
+    end = None
+    duration = None
+
+    def __enter__(self):
+        self.begin = perf_counter()
+        return self
+
+    def __exit__(self, t, v, tb):
+        self.end = perf_counter()
+        self.duration = self.end - self.begin
+
+def log_timed(func):
+    @functools.wraps(func)
+    def f(*args, **kwargs):
+        t = timer()
+        with t:
+            result = func(*args, **kwargs)
+        logger.debug("Function %s took %s", func.__name__, t.duration)
+        return result
+    return f
 
 
 class SpeedTestData(object):
@@ -165,6 +188,7 @@ class SpeedTestData(object):
     def data_for_worker(self, root, worker):
         return root['speedtest'][worker.worker_number]
 
+    @log_timed
     def populate(self, db_factory):
         self._guarantee_min_random_data(self.objects_per_txn)
 
@@ -177,20 +201,20 @@ class SpeedTestData(object):
         db.close()
 
     def _populate_into_open_database(self, db, conn, root):
-        # clear the database
-        root['speedtest'] = None
         # We explicitly leave the `speedtest_min` value around
         # so that it can survive packs.
-        transaction.commit()
-        # XXX: Why are we packing here?
         if self.pack_on_populate:
+            # clear the database
+            root['speedtest'] = None
+            transaction.commit()
             db.pack()
 
-        # Make sure the minimum objects are present
+        # Make sure the minimum objects are present. Not all storages
+        # support __len__ to return the size of the database.
+        # FileStorage, RelStorage and ClientStorage do.
+
+        db_count = max(len(db.storage), len(conn._storage))
         if self.min_object_count:
-            # not all storages support __len__ to return the size of the database.
-            # FileStorage, RelStorage and ClientStorage do.
-            db_count = max(len(db.storage), len(conn._storage))
             needed = max(self.min_object_count - db_count, 0)
             if needed:
                 logger.debug("Adding %d objects to a DB of size %d",
@@ -209,13 +233,18 @@ class SpeedTestData(object):
                 transaction.commit()
                 logger.debug("Added %d objects to a DB of size %d",
                              len(m), db_count)
-            else:
-                logger.debug("Database is already of size %s", db_count)
+
+        db_count = max(len(db.storage), len(conn._storage))
+        logger.debug("Working with database %s of size %d",
+                     db, db_count)
 
         # put a tree in the database
-        root['speedtest'] = t = self.MappingType()
+        if 'speedtest' not in root or not isinstance(root['speedtest'], self.MappingType):
+            root['speedtest'] = t = self.MappingType()
+        t = root['speedtest']
         for i in range(self.concurrency):
-            t[i] = self.MappingType()
+            if i not in t or not isinstance(t[i], self.MappingType):
+                t[i] = self.MappingType()
         transaction.commit()
         logger.debug('Populated storage.')
 
@@ -255,7 +284,8 @@ class SpeedTestWorker(object):
             # zapping could be a no-op.
             db = db_factory()
             db.close()
-            db.speedtest_zap_all()
+            zap = log_timed(db.speedtest_zap_all)
+            zap()
             # Populate everything back
             logger.debug("In master, populating database")
             self.data.populate(db_factory)
@@ -362,14 +392,17 @@ class SpeedTestWorker(object):
             raise AssertionError("Loaded data; expected 0, got %s" % (loads,))
 
     def __conn_did_load_objects(self, conn, loops=1, data=None):
+        from ZODB.utils import u64
         loads, _ = conn.getTransferCounts(True)
         if loads < self.objects_per_txn * loops:
-            raise AssertionError("Didn't load enough data from %s; expected %s, got %s (out of %s)" % (
-                conn,
-                self.objects_per_txn * loops,
-                loads,
-                len(data) if data is not None else None,
-            ))
+            raise AssertionError(
+                "Didn't load enough data from %s; expected %s, got %s (out of %s at %s)" % (
+                    conn,
+                    self.objects_per_txn * loops,
+                    loads,
+                    len(data) if data is not None else None,
+                    (u64(data._p_serial), u64(data._p_oid)) if data is not None else  None
+                ))
 
     # Important: If you haven't done anything to join to a
     # transaction, don't even bother aborting/committing --- we're not
