@@ -2,12 +2,16 @@
  Changes
 =========
 
-0.7.1 (unreleased)
+0.8.0 (unreleased)
 ==================
 
 - Fix ``--min-objects``. Previously it did nothing.
 
 - Add ``--pack`` to pack each storage before running.
+
+- Let the ``--log`` option take a path to a ZConfig logging
+  configuration file that will be used to configure logging. This
+  allows fine-grained control over log levels.
 
 0.7.0 (2019-05-31)
 ==================

@@ -52,8 +52,21 @@ class ZapAction(argparse.Action):
         else:
             setattr(namespace, self.dest, values.split(','))
 
+class LogAction(argparse.Action):
+    # Either validate the string against the logging levels,
+    # or attempt to interpret it as a path to a ZConfig file.
+    def __call__(self, parser, namespace, values, option_string=None):
+        if not values:
+            # no argument given, default
+            setattr(namespace, self.dest, 'INFO')
+        elif values.upper() in ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG']:
+            setattr(namespace, self.dest, values.upper())
+        else:
+            as_file = argparse.FileType('r')(values)
+            setattr(namespace, self.dest, as_file)
 
-def main(argv=None): # pylint:disable=too-many-statements
+
+def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-many-branches
     if argv is None:
         argv = sys.argv[1:]
 
@@ -74,7 +87,7 @@ def main(argv=None): # pylint:disable=too-many-statements
     # This is a default, so put it early
     argv[0:0] = env_options
 
-    def worker_args(cmd, args):
+    def worker_args(cmd, args): # pylint:disable=too-many-branches
         # Sadly, we have to manually put arguments that mean something to children
         # back on. There's no easy 'unparse' we can use. Some of the options for
         # pyperf, if we duplicate in the children, lead to errors (such as -o)
@@ -199,8 +212,12 @@ def main(argv=None): # pylint:disable=too-many-statements
 
     out_group.add_argument(
         "--log", nargs="?", const="INFO", default=False,
-        choices=['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'],
-        help="Enable logging in the root logger at the given level (INFO)"
+        action=LogAction,
+        help="Enable logging in the root logger at the given level. "
+        "Without an argument, the default is INFO. You may specify "
+        "DEBUG, ERROR, CRITICAL, etc. Or you may give a path to a file "
+        "that can be used by ZConfig to configure the loggers. See "
+        "https://zconfig.readthedocs.io/en/latest/using-logging.html"
     )
 
     # Profiling
@@ -263,10 +280,20 @@ def main(argv=None): # pylint:disable=too-many-statements
         options.benchmarks = ContainsAll()
 
     if options.log:
-        import logging
-        lvl_map = getattr(logging, '_nameToLevel', None) or getattr(logging, '_levelNames', {})
-        logging.basicConfig(level=lvl_map.get(options.log, logging.INFO),
-                            format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s')
+        if hasattr(options.log, 'read'):
+            # ZConfig file
+            import ZConfig
+            with options.log as f:
+                conf_text = f.read()
+            ZConfig.configureLoggers(conf_text)
+            options.log = options.log.name
+        else:
+            import logging
+            lvl_map = getattr(logging, '_nameToLevel', None) or getattr(logging, '_levelNames', {})
+            logging.basicConfig(
+                level=lvl_map.get(options.log, logging.INFO),
+                format='%(asctime)s %(levelname)-5.5s [%(name)s][%(thread)d:%(process)d][%(threadName)s] %(message)s'
+            )
 
     from ._dbsupport import get_databases_from_conf_file
     databases = get_databases_from_conf_file(options.config_file)
