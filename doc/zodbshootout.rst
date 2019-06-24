@@ -270,6 +270,10 @@ These options control the output produced.
   will be enabled. This is useful for details about the workings of a
   storage and the effects various options have on it.
 
+  .. versionchanged:: 0.8
+     This option can also take a path to a ZConfig logging
+     configuration file.
+
   .. versionadded:: 0.6
 
 
