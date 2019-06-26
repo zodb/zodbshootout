@@ -69,6 +69,12 @@ reading under the given conditions.
     quickly, independently of caching. The sample output above shows
     that cold read time is currently a significant ZEO weakness.
 
+* Read prefetched cold objects
+
+    This is just like the previous test, except the objects are
+    prefetched using the ZODB 5 API. This demonstrates any value of
+    bulk prefetching implemented in a database.
+
 * Read hot objects
 
     In the same process as was used for reading cold objects,

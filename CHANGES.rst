@@ -13,6 +13,9 @@
   configuration file that will be used to configure logging. This
   allows fine-grained control over log levels.
 
+- Add a benchmark (``prefetch_cold``) to test the effect of bulk
+  prefetching objects into the storage cache.
+
 0.7.0 (2019-05-31)
 ==================
 

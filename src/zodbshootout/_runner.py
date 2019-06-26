@@ -232,6 +232,8 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
             ('%s: add %d objects', speedtest.bench_add, 'add'),
             ('%s: update %d objects', speedtest.bench_update, 'update',),
             ('%s: read %d cold objects', speedtest.bench_cold_read, 'cold',),
+            ('%s: read %d cold prefeteched objects', speedtest.bench_cold_read_prefetch,
+             'prefetch_cold',),
             ('%s: read %d warm objects', speedtest.bench_read_after_write, 'warm',),
             ('%s: read %d hot objects', speedtest.bench_hot_read, 'hot',),
             ('%s: read %d steamin objects', speedtest.bench_steamin_read, 'steamin',),

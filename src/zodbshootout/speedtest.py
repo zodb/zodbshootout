@@ -497,8 +497,8 @@ class SpeedTestWorker(object):
         self.__check_access_count(got, loops)
         return duration
 
-    @_inner_loops
-    def bench_cold_read(self, loops, db_factory):
+    def __do_bench_cold_read(self, loops, db_factory, prefetch):
+        # pylint:disable=too-many-locals
         # Because each of these is run in its own process, if we're
         # run first, then any in-memory cache is already as cold as
         # it's going to get. Of course, that's only true for our first run through,
@@ -511,12 +511,15 @@ class SpeedTestWorker(object):
         duration = 0
         got = 0
         total_loops = loops * self.inner_loops
+
         for i in range(total_loops):
             db = db_factory()
             begin = perf_counter()
             conn = db.open()
             root = conn.root()
             m = self.data.data_for_worker(root, self)
+            if prefetch:
+                conn.prefetch(itervalues(m))
             got += self.data.read_test_read_values(itervalues(m))
             end = perf_counter()
             duration += (end - begin)
@@ -533,10 +536,19 @@ class SpeedTestWorker(object):
             db.close()
 
         self.__check_access_count(got, total_loops)
-
         return duration
 
+    @_inner_loops
+    def bench_cold_read(self, loops, db_factory):
+        return self.__do_bench_cold_read(loops, db_factory, False)
+
+    @_inner_loops
+    def bench_cold_read_prefetch(self, loops, db_factory):
+        return self.__do_bench_cold_read(loops, db_factory, True)
+
     def __prime_caches(self, db):
+        # conn.prefetch() may or may not do anything, so
+        # we actually access the data.
         conn = db.open()
         root = conn.root()
         m = self.data.data_for_worker(root, self)

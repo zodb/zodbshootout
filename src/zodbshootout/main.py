@@ -261,7 +261,8 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
                         nargs='*',
                         default='all',
                         choices=['add', 'update', 'warm',
-                                 'cold', 'hot', 'steamin', 'all', 'commit'])
+                                 'cold', 'prefetch_cold',
+                                 'hot', 'steamin', 'all', 'commit'])
     options = runner.parse_args(argv)
 
     #import os
