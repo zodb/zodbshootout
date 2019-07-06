@@ -16,6 +16,10 @@
 - Add a benchmark (``prefetch_cold``) to test the effect of bulk
   prefetching objects into the storage cache.
 
+- Add a benchmark (``readCurrent``) to test the speed of using
+  ``Connection.readCurrent`` (specifically, to see how well it can
+  parallelize).
+
 0.7.0 (2019-05-31)
 ==================
 

@@ -391,6 +391,11 @@ class SpeedTestWorker(object):
         if loads != 0:
             raise AssertionError("Loaded data; expected 0, got %s" % (loads,))
 
+    def __conn_did_not_store(self, conn):
+        _, stores = conn.getTransferCounts(True)
+        if stores != 0:
+            raise AssertionError("Stored data; expected 0, got %s" % (stores,))
+
     def __conn_did_load_objects(self, conn, loops=1, data=None):
         from ZODB.utils import u64
         loads, _ = conn.getTransferCounts(True)
@@ -548,7 +553,8 @@ class SpeedTestWorker(object):
 
     def __prime_caches(self, db):
         # conn.prefetch() may or may not do anything, so
-        # we actually access the data.
+        # we actually access the data. This also ensure the objects
+        # are unghostified.
         conn = db.open()
         root = conn.root()
         m = self.data.data_for_worker(root, self)
@@ -637,8 +643,41 @@ class SpeedTestWorker(object):
         end = perf_counter()
         self.__conn_did_not_load(conn)
         conn.close()
+        db.close()
         return end - begin
 
+    @_inner_loops
+    def bench_readCurrent(self, loops, db_factory):
+        """
+        Tests the effect of adding calls to `Connection.readCurrent`
+        for all objects, even though we do not mutate anything.
+        """
+
+        # Connection.readCurrent only interacts with the storage when
+        # it is joined to a transaction; Connection only joins a
+        # transaction when an object is modified or added, via a call
+        # to register() or add(). We don't want to actually modify anything,
+        # so we artificially register.
+        #
+        # Also, objects can only go into readCurrent when they have a
+        # _p_serial, which they only get once unghosted.
+        db = db_factory()
+        conn, root = self.__prime_caches(db)
+
+        begin = perf_counter()
+        for _ in range(loops * self.inner_loops):
+            transaction.begin()
+            m = self.data.data_for_worker(root, self)
+            conn.register(m)
+            rc = conn.readCurrent
+            for v in itervalues(m):
+                rc(v)
+            transaction.commit()
+        end = perf_counter()
+        self.__conn_did_not_store(conn)
+        conn.close()
+        db.close()
+        return end - begin
 
 class ForkedSpeedTestWorker(SpeedTestWorker):
     # Used when concurrency is achieved through multiple
