@@ -231,6 +231,7 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
     # TODO: Where to include leak prints?
     for bench_descr, bench_func, bench_opt_name in (
             ('%s: add %d objects', speedtest.bench_add, 'add'),
+            ('%s: store %d raw pickles', speedtest.bench_store, 'store'),
             ('%s: update %d objects', speedtest.bench_update, 'update',),
             ('%s: read %d cold objects', speedtest.bench_cold_read, 'cold',),
             ('%s: read %d cold prefeteched objects', speedtest.bench_cold_read_prefetch,

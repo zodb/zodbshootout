@@ -31,6 +31,9 @@
 - Add a benchmark for conflict resolution, designed to emphasize
   parallel commit. See :issue:`46`.
 
+- Add a benchmark focused *just* on storing new objects, eliminating
+  the pickling and OID allocation from the timing. See :issue:`49`.
+
 0.7.0 (2019-05-31)
 ==================
 

@@ -32,6 +32,7 @@ from persistent.mapping import PersistentMapping
 
 from zope.interface import implementer
 from ZODB.Connection import TransactionMetaData
+from ZODB.serialize import ObjectWriter
 
 from .interfaces import IDBBenchmarkCollection
 from ._pobject import pobject_base_size
@@ -309,8 +310,17 @@ class SpeedTestData(object):
         transaction.commit()
         logger.debug('Populated storage.')
 
+    def make_pickles(self, count, conn=None):
+        writer = ObjectWriter()
+        writer._p_jar = conn
+        self._guarantee_min_random_data(count)
+
+        pickles = [writer.serialize(self.ObjectType(rd))
+                   for rd
+                   in self.__random_data[:count]]
+        return pickles
+
     def __install_count_objects(self, needed, conn):
-        from ZODB.serialize import ObjectWriter
         # If `needed` is large, this could result in a single
         # very large transaction. We therefore split it up
         # into smaller, more manageable transactions. we use
@@ -322,15 +332,8 @@ class SpeedTestData(object):
         # seems. However, all these objects are *not* reachable from
         # any other object, they're garbage. (TODO: Add them by OID to
         # a btree collection?)
-
-        writer = ObjectWriter()
-        writer._p_jar = conn
         chunk_size = min(needed, self.objects_per_txn)
-        self._guarantee_min_random_data(chunk_size)
-
-        pickles = [writer.serialize(self.ObjectType(rd))
-                   for rd
-                   in self.__random_data[:chunk_size]]
+        pickles = self.make_pickles(chunk_size, conn)
 
         storage = conn._storage
         while needed > 0:
@@ -547,6 +550,43 @@ class SpeedTestWorker(object):
         db.close()
 
         return duration
+
+    @_inner_loops
+    def bench_store(self, loops, db_factory):
+        """
+        Time the minimum to store objects. Pickling and allocating OIDs
+        and syncing the storage are all left out.
+
+        Note that this leaves unreachable objects in the database.
+        """
+        db = db_factory()
+        conn = db.open()
+        pickles = self.data.make_pickles(self.objects_per_txn, conn)
+
+        storage = conn._storage
+        duration = 0
+        for _ in range(loops * self.inner_loops):
+            t = TransactionMetaData()
+            storage.tpc_begin(t)
+            try:
+                oids = [storage.new_oid() for _ in pickles]
+                begin = perf_counter()
+                for pickle, oid in zip(pickles, oids):
+                    storage.store(oid, 0, pickle, '', t)
+
+                storage.tpc_vote(t)
+                storage.tpc_finish(t)
+            except:
+                storage.tpc_abort(t)
+                raise
+
+            end = perf_counter()
+            duration += (end - begin)
+        conn.close()
+        db.close()
+
+        return duration
+
 
     @_inner_loops
     def bench_update(

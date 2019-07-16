@@ -274,6 +274,7 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
             'prefetch_cold',
             'readCurrent',
             'steamin',
+            'store',
             'update',
             'warm',
         ],
