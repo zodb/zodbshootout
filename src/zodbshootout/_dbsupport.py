@@ -128,26 +128,16 @@ class MappingFactory(object):
 
     def open(self):
         from ZODB import DB
-        from ZODB.MappingStorage import MappingStorage
+        # Use a DemoStorage to support conflict resolution and
+        # generally provide a more realistic, but still minimal,
+        # storage to compare against.
+        from ZODB.DemoStorage import DemoStorage
 
-        db = DB(MappingStorage())
-        import transaction
+        db = DB(DemoStorage())
 
         db.close = lambda: None
-        self.data.populate(lambda: db)
+        self.data.populate(lambda: db, include_data=True)
         del db.close
-
-        mconn = db.open()
-        mroot = mconn.root()
-        for worker in range(self.concurrency):
-            mroot['speedtest'][worker].update(self.data.data_to_store())
-        transaction.commit()
-        mconn.cacheMinimize()
-        # Clear transfer counts so as not to mess up any downstream
-        # assertions about what they should be. (No other database does
-        # stuff on opening.)
-        mconn.getTransferCounts(True)
-        mconn.close()
         return db
 
     __call__ = open

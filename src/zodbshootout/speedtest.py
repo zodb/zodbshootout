@@ -16,6 +16,8 @@ The core speed test loop.
 """
 from __future__ import print_function, absolute_import
 
+# pylint:disable=too-many-locals
+
 # This file is imported after gevent monkey patching (if applicable)
 # so it's safe to import anything.
 import gc
@@ -29,6 +31,7 @@ import transaction
 from persistent.mapping import PersistentMapping
 
 from zope.interface import implementer
+from ZODB.Connection import TransactionMetaData
 
 from .interfaces import IDBBenchmarkCollection
 from ._pobject import pobject_base_size
@@ -42,6 +45,13 @@ def itervalues(d):
         iv = d.itervalues
     except AttributeError:
         iv = d.values
+    return iv()
+
+def iteritems(d):
+    try:
+        iv = d.iteritems
+    except AttributeError:
+        iv = d.items
     return iv()
 
 
@@ -192,22 +202,56 @@ class SpeedTestData(object):
         data = self.__random_data
         return dict((n, kind(data[n])) for n in range(begin_key, count + begin_key))
 
+    @property
+    def _configuration_name(self):
+        """
+        The name that uniquely describes this particular configuration,
+        to be used as a destination in the database.
+
+        This ensures that different runs don't interfere with each other
+        or throw unexpected errors when the DB isn't zapped.
+        """
+        # Right now, this just incorporates the number of objects,
+        # but it could conceivably include object size
+        return 'object_count_%d' % self.objects_per_txn
+
     def data_for_worker(self, root, worker):
-        return root['speedtest'][worker.worker_number]
+        """
+        Return the mapping that *worker* should use to read or write.
+        """
+        return self.data_for_worker_id(root, worker.worker_number)
+
+    def data_for_worker_id(self, root, worker_id):
+        """
+        Return the mapping that *worker_id* should use to read or write.
+        """
+        return root['speedtest'][self._configuration_name][worker_id]
 
     @log_timed
-    def populate(self, db_factory):
+    def populate(self, db_factory, include_data=False):
+        """
+        Opens the database and a connection, creates the necessary
+        tree structure, commits the transaction, and closes the database.
+        """
         self._guarantee_min_random_data(self.objects_per_txn)
 
         db = db_factory()
         conn = db.open()
         root = conn.root()
-        self._populate_into_open_database(db, conn, root)
-        conn.close()
+        self._populate_into_open_database(db, conn, root, include_data)
         conn.cacheMinimize()
+        # Clear transfer counts so as not to mess up any downstream
+        # assertions about what they should be.
+        conn.getTransferCounts(True)
+        conn.close()
         db.close()
 
-    def _populate_into_open_database(self, db, conn, root):
+    CONFLICT_IDENTIFIER = "conflicts"
+
+    def _populate_into_open_database(self, db, conn, root, include_data):
+        """
+        Commits the transaction.
+        """
         # We explicitly leave the `speedtest_min` value around
         # so that it can survive packs.
         if self.pack_on_populate:
@@ -233,20 +277,40 @@ class SpeedTestData(object):
         logger.debug("Working with database %s of size %d",
                      db, db_count)
 
-        # put a tree in the database
-        if 'speedtest' not in root or not isinstance(root['speedtest'], self.MappingType):
-            root['speedtest'] = t = self.MappingType()
-        t = root['speedtest']
+        # Put a tree in the database, being careful not to overwrite
+        # anything that's already usefully there.
+        # speedtest (dict)
+        # |\
+        # | + object_count_N (maps)
+        # |  \
+        # |   + 1...M (maps for each worker; possibly empty or full)
+        # |   + conflicts (a shared map, full of N objects)
+
+        def install_mapping(parent, key, kind=self.MappingType):
+            if not isinstance(parent.get(key), kind):
+                parent[key] = kind()
+            return parent[key]
+
+        # The top two levels are persistent mappings so we can
+        # use string keys; we'll never mutate them during the course of
+        # a benchmark run.
+        t = install_mapping(root, 'speedtest', kind=PersistentMapping)
+        t = install_mapping(t, self._configuration_name, kind=PersistentMapping)
         for i in range(self.concurrency):
-            if i not in t or not isinstance(t[i], self.MappingType):
-                t[i] = self.MappingType()
+            worker_map = install_mapping(t, i)
+            if include_data and len(worker_map) != self.objects_per_txn:
+                worker_map.update(self.data_to_store())
+                assert len(worker_map) == self.objects_per_txn
+
+        conflicts = install_mapping(t, self.CONFLICT_IDENTIFIER)
+        if not conflicts:
+            conflicts.update(self.data_to_store())
+        assert len(conflicts) == self.objects_per_txn
         transaction.commit()
         logger.debug('Populated storage.')
 
     def __install_count_objects(self, needed, conn):
         from ZODB.serialize import ObjectWriter
-        from ZODB.Connection import TransactionMetaData
-
         # If `needed` is large, this could result in a single
         # very large transaction. We therefore split it up
         # into smaller, more manageable transactions. we use
@@ -294,6 +358,7 @@ def _no_inner_loops(f):
 
 @implementer(IDBBenchmarkCollection)
 class SpeedTestWorker(object):
+    # pylint:disable=too-many-public-methods
     worker_number = 0
     inner_loops = 10
 
@@ -417,7 +482,7 @@ class SpeedTestWorker(object):
     def __check_access_count(self, accessed, loops=1):
         if accessed != self.objects_per_txn * loops:
             raise AssertionError('data mismatch; expected %s got %s' % (
-                self.objects_per_txn, accessed))
+                self.objects_per_txn, accessed // loops))
 
     def __conn_did_not_load(self, conn):
         loads, _ = conn.getTransferCounts(True)
@@ -484,24 +549,48 @@ class SpeedTestWorker(object):
         return duration
 
     @_inner_loops
-    def bench_update(self, loops, db_factory):
+    def bench_update(
+            self, loops, db_factory,
+            worker_id=None,
+            data_selector=itervalues,
+    ):
         db = db_factory()
-        begin = perf_counter()
-        conn = db.open()
-        root = conn.root()
-        got = 0
-        for _ in range(loops):
-            m = self.data.data_for_worker(root, self)
-            for _ in range(self.inner_loops):
-                got += self.data.write_test_update_values(itervalues(m))
-                transaction.commit()
-        end = perf_counter()
+        transaction_manager = transaction.TransactionManager(explicit=True)
+        conn = db.open(transaction_manager)
+
+        count_updated = 0
+        duration = 0.0
+        for _ in range(loops * self.inner_loops):
+            begin = perf_counter()
+            transaction_manager.begin()
+            root = conn.root()
+            m = self.data.data_for_worker_id(root, worker_id or self.worker_number)
+            count_updated += self.data.write_test_update_values(data_selector(m))
+            transaction_manager.commit()
+            end = perf_counter()
+            duration += (end - begin)
 
         conn.close()
-        self.__check_access_count(got, loops * self.inner_loops)
+        if data_selector is itervalues:
+            # We can only assert that we hit the right number if we're
+            # not doing fancy selection.
+            self.__check_access_count(count_updated, loops * self.inner_loops)
         db.close()
-        duration = end - begin
         return duration
+
+    @_inner_loops
+    def bench_conflicting_updates(self, loops, db_factory):
+        # Select either evens or odds to write to, based on our own
+        # worker number; thus each worker conflicts on half the
+        # objects with half the other workers. This interleaves the
+        # writes such that storages that don't lock the entire
+        # database may be able to make more progress.
+        selector_value = self.worker_number % 2
+        def selector(m):
+            for k, v in iteritems(m):
+                if k % 2 == selector_value:
+                    yield v
+        return self.bench_update(loops, db_factory, self.data.CONFLICT_IDENTIFIER, selector)
 
     @_no_inner_loops
     def bench_read_after_write(self, loops, db_factory):
@@ -718,6 +807,40 @@ class SpeedTestWorker(object):
         conn.close()
         db.close()
         return end - begin
+
+    @_inner_loops
+    def bench_new_oid(self, loops, db_factory):
+        """
+        Tests how fast new OIDs can be allocated.
+
+        This isolates one particular part of the storage API,
+        which is otherwise easily hidden in adding new objects.
+
+        We join the transaction and commit at the end in case there is
+        any locking or conflict resolution that the storage does.
+        The transaction is handled manually.
+        """
+        duration = 0
+        db = db_factory()
+
+        conn = db.open()
+        storage = conn._storage
+
+        loops = range(loops)
+        inner_loops = range(self.inner_loops)
+        to_allocate = range(self.objects_per_txn)
+        for _ in loops:
+            for _ in inner_loops:
+                tx = TransactionMetaData()
+                storage.tpc_begin(tx)
+                begin = perf_counter()
+                for _ in to_allocate:
+                    storage.new_oid()
+                storage.tpc_vote(tx)
+                storage.tpc_finish(tx)
+                end = perf_counter()
+                duration += (end - begin)
+        return duration
 
 class ForkedSpeedTestWorker(SpeedTestWorker):
     # Used when concurrency is achieved through multiple

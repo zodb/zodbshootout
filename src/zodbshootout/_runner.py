@@ -185,8 +185,7 @@ def run_with_options(runner, options):
     # yet (e.g., a switch from Py2 to Py3).
     if not options.worker and not options.zap:
         for factory in contenders:
-            db = factory.open()
-            db.close()
+            data.populate(factory)
 
     for db_factory in contenders:
         _run_benchmarks_for_contender(runner, options, data, db_factory)
@@ -241,6 +240,8 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
             ('%s: read %d hot objects', speedtest.bench_hot_read, 'hot',),
             ('%s: read %d steamin objects', speedtest.bench_steamin_read, 'steamin',),
             ('%s: empty commit', speedtest.bench_empty_transaction_commit, 'commit',),
+            ('%s: allocate %d OIDs', speedtest.bench_new_oid, "new_oid",),
+            ('%s: update %d conflicting objects', speedtest.bench_conflicting_updates, "conflicts",),
     ):
         if bench_opt_name not in options.benchmarks:
             continue

@@ -27,7 +27,13 @@ class AbstractPObject(object):
 
 class PObject(Persistent,
               AbstractPObject):
+    """
+    Persistent object for tests.
 
+    This object can resolve all conflicts by simply throwing away
+    whatever was found in the database and persisting its current
+    state.
+    """
     def _write_data(self, data):
         self.data = data
 
@@ -38,6 +44,10 @@ class PObject(Persistent,
 
     def __hash__(self):
         return hash((self.data, self.attr))
+
+    def _p_resolveConflict(self, old_state, committed_state, new_state):
+        # pylint:disable=unused-argument
+        return new_state
 
 
 # Estimate the size of a minimal PObject stored in ZODB.

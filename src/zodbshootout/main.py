@@ -256,13 +256,28 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
     )
 
     parser.add_argument("config_file", type=argparse.FileType())
-    parser.add_argument('benchmarks',
-                        nargs='*',
-                        default='all',
-                        choices=['add', 'update', 'warm',
-                                 'cold', 'prefetch_cold',
-                                 'readCurrent',
-                                 'hot', 'steamin', 'all', 'commit'])
+    parser.add_argument(
+        'benchmarks',
+        nargs='*',
+        default='all',
+        # TODO: Get this list dynamically.
+        choices=[
+            # Special
+            'all',
+            # Individual
+            'add',
+            'cold',
+            'commit',
+            'conflicts',
+            'hot',
+            'new_oid',
+            'prefetch_cold',
+            'readCurrent',
+            'steamin',
+            'update',
+            'warm',
+        ],
+    )
     options = runner.parse_args(argv)
 
     #import os

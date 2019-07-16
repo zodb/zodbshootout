@@ -26,6 +26,11 @@
 - Increase the default size of objects to 300 bytes, and make it the
   same on Python 2 and Python 3.
 
+- Add a benchmark for allocating new OIDs. See :issue:`47`.
+
+- Add a benchmark for conflict resolution, designed to emphasize
+  parallel commit. See :issue:`46`.
+
 0.7.0 (2019-05-31)
 ==================
 
