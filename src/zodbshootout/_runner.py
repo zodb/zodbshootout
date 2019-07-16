@@ -181,7 +181,9 @@ def run_with_options(runner, options):
 
     # In the master, go ahead and open each database; we don't want to discover
     # a problem half-way through the run. Also, this helps with leak checks.
-    if not options.worker:
+    # Except, if we're going to zap, it's possible the database can't be opened
+    # yet (e.g., a switch from Py2 to Py3).
+    if not options.worker and not options.zap:
         for factory in contenders:
             db = factory.open()
             db.close()

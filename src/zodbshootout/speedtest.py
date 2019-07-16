@@ -27,7 +27,6 @@ from pyperf import perf_counter
 import transaction
 
 from persistent.mapping import PersistentMapping
-from persistent.list import PersistentList
 
 from zope.interface import implementer
 
@@ -144,6 +143,13 @@ class SpeedTestData(object):
         _RANDOM_FILE_DATA = _f.read().replace(b'\n', b'').split()
     del _f
 
+    def __data_chunk_generator(self, chunksize=1024):
+        r = random.Random()
+        words = self._RANDOM_FILE_DATA
+        chunksize = min(chunksize, 1024)
+        while True:
+            sample = r.sample(words, len(words) // 10)
+            yield b' '.join(sample[0:chunksize])
 
     def _random_data(self, size):
         """
@@ -152,27 +158,28 @@ class SpeedTestData(object):
         Use pseudo-random data in case compression is in play so we get a more realistic
         size and time value than a single 'x'*size would get.
         """
+        datagen = self.__data_chunk_generator(size)
 
-        def fdata():
-            words = self._RANDOM_FILE_DATA
-            chunksize = min(size, 1024)
-            while True:
-                sample = random.sample(words, len(words) // 10)
-                yield b' '.join(sample[0:chunksize])
-        datagen = fdata()
-
-        data = b''
-        while len(data) < size:
-            data += next(datagen)
-        return data
+        while True:
+            data = b''
+            while len(data) < size:
+                data += next(datagen) # pylint:disable=stop-iteration-return
+            yield data
 
     def _guarantee_min_random_data(self, count):
         if len(self.__random_data) < count:
             needed = count - len(self.__random_data)
-            data_size = max(0, self.object_size - pobject_base_size)
-            self.__random_data.extend([self._random_data(data_size) for _ in range(needed)])
+            data_size = max(10, self.object_size - pobject_base_size)
+            datagen = self._random_data(data_size)
+            self.__random_data.extend([next(datagen) for _ in range(needed)])
 
-    def data_to_store(self, count=None):
+    def data_to_store(self, count=None, begin_key=0):
+        """
+        Return a dictionary with numeric keys from *begin_key*
+        up to *count* plus *begin_key*.
+
+        The values are persistent objects.
+        """
         # Must be fresh when accessed because could already
         # be stored in another database if we're using threads.
         # However, the random data can be relatively expensive to create,
@@ -183,7 +190,7 @@ class SpeedTestData(object):
         self._guarantee_min_random_data(count)
         kind = self.ObjectType
         data = self.__random_data
-        return dict((n, kind(data[n])) for n in range(count))
+        return dict((n, kind(data[n])) for n in range(begin_key, count + begin_key))
 
     def data_for_worker(self, root, worker):
         return root['speedtest'][worker.worker_number]
@@ -219,21 +226,9 @@ class SpeedTestData(object):
             if needed:
                 logger.debug("Adding %d objects to a DB of size %d",
                              needed, db_count)
-                # We append to a list the new objects. This makes sure that we
-                # don't *erase* some objects we were counting on.
-                l = root.get('speedtest_min')
-                if l is None:
-                    l = root['speedtest_min'] = PersistentList()
-
-                # If `needed` is large, this could result in a single
-                # very large transaction. Do we need to think about splitting it up?
-                m = PersistentMapping()
-                m.update(self.data_to_store(needed))
-                l.append(m)
-                transaction.commit()
-                logger.debug("Added %d objects to a DB of size %d",
-                             len(m), db_count)
-
+                self.__install_count_objects(needed, conn)
+                logger.info("Added %d objects to a DB of size %d",
+                            needed, db_count)
         db_count = max(len(db.storage), len(conn._storage))
         logger.debug("Working with database %s of size %d",
                      db, db_count)
@@ -247,6 +242,44 @@ class SpeedTestData(object):
                 t[i] = self.MappingType()
         transaction.commit()
         logger.debug('Populated storage.')
+
+    def __install_count_objects(self, needed, conn):
+        from ZODB.serialize import ObjectWriter
+        from ZODB.Connection import TransactionMetaData
+
+        # If `needed` is large, this could result in a single
+        # very large transaction. We therefore split it up
+        # into smaller, more manageable transactions. we use
+        # the same transaction size we'll use for the regular
+        # tests so the user can influence how many transactions it takes
+        # (which matters in RelStorage history-preserving mode).
+
+        # We pickle up front, because that's the slowest part, it
+        # seems. However, all these objects are *not* reachable from
+        # any other object, they're garbage. (TODO: Add them by OID to
+        # a btree collection?)
+
+        writer = ObjectWriter()
+        writer._p_jar = conn
+        chunk_size = min(needed, self.objects_per_txn)
+        self._guarantee_min_random_data(chunk_size)
+
+        pickles = [writer.serialize(self.ObjectType(rd))
+                   for rd
+                   in self.__random_data[:chunk_size]]
+
+        storage = conn._storage
+        while needed > 0:
+            logger.debug("Generate data")
+            needed -= len(pickles)
+            t = TransactionMetaData()
+            storage.tpc_begin(t)
+            for pickle in pickles:
+                storage.store(storage.new_oid(), 0, pickle, '', t)
+            storage.tpc_vote(t)
+            storage.tpc_finish(t)
+
+            logger.debug("Added %d objects; %d to go.", len(pickles), needed)
 
 
 def _inner_loops(f):
@@ -431,6 +464,13 @@ class SpeedTestWorker(object):
         for _ in range(loops):
             m = self.data.data_for_worker(root, self)
             for _ in range(self.inner_loops):
+                # NOTE: This is measuring the time to update the
+                # dictionary (non-storage related), and commit, which
+                # means the time to serialize all the objects (storage
+                # independent) and assign them oids, plus write them
+                # to storage, and then poll for
+                # invalidations/afterCompletion (which depends on
+                # whether the transaction is explicit or not).
                 begin = perf_counter()
                 m.update(self.data_to_store())
                 transaction.commit()

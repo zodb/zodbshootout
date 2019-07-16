@@ -31,6 +31,14 @@ class PObject(Persistent,
     def _write_data(self, data):
         self.data = data
 
+    def __eq__(self, other):
+        if isinstance(other, PObject):
+            return other.data == self.data and other.attr == self.attr
+        return NotImplemented
+
+    def __hash__(self):
+        return hash((self.data, self.attr))
+
 
 # Estimate the size of a minimal PObject stored in ZODB.
 pobject_base_size = (

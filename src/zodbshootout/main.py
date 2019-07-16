@@ -19,8 +19,6 @@ from __future__ import print_function, absolute_import
 import argparse
 import sys
 
-from ._pobject import pobject_base_size
-
 
 if str is not bytes:
     ask = input
@@ -144,7 +142,8 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
         help="Object counts to use (default %(default)d).",
     )
     obj_group.add_argument(
-        "-s", "--object-size", dest="object_size", default=pobject_base_size,
+        "-s", "--object-size", dest="object_size",
+        default=300,
         type=int,
         help="Size of each object in bytes (estimated, default approx. %(default)d)"
     )

@@ -20,6 +20,12 @@
   ``Connection.readCurrent`` (specifically, to see how well it can
   parallelize).
 
+- Make pre-loading objects with ``--min-objects`` faster by using
+  pre-serialized object data.
+
+- Increase the default size of objects to 300 bytes, and make it the
+  same on Python 2 and Python 3.
+
 0.7.0 (2019-05-31)
 ==================
 
