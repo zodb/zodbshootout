@@ -794,16 +794,22 @@ class SpeedTestWorker(object):
         return duration
 
     @_inner_loops
-    def bench_empty_transaction_commit(self, loops, db_factory):
+    def bench_empty_transaction_commit_explicit(self, loops, db_factory, explicit=True):
         db = db_factory()
         # When we open a connection, it adds itself to the transaction
         # manager as a synchronizer.
         # This does things when transactions are opened and closed.
         # For example, it synchronizes the storage.
         # The same set of calls happens for commit or abort.
-        transaction_manager = transaction.TransactionManager(explicit=True)
+        if explicit:
+            transaction_manager = transaction.TransactionManager(explicit=True)
+        else:
+            transaction_manager = None
+
         conn = db.open(transaction_manager)
         conn.getTransferCounts(True) # clear them
+
+        transaction_manager = conn.transaction_manager
 
         begin = perf_counter()
         for _ in range(loops * self.inner_loops):
@@ -814,6 +820,10 @@ class SpeedTestWorker(object):
         conn.close()
         db.close()
         return end - begin
+
+    @_inner_loops
+    def bench_empty_transaction_commit_implicit(self, loops, db_factory):
+        return self.bench_empty_transaction_commit_explicit(loops, db_factory, False)
 
     @_inner_loops
     def bench_readCurrent(self, loops, db_factory):

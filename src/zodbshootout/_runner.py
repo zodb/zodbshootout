@@ -240,7 +240,10 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
             ('%s: read %d warm objects', speedtest.bench_read_after_write, 'warm',),
             ('%s: read %d hot objects', speedtest.bench_hot_read, 'hot',),
             ('%s: read %d steamin objects', speedtest.bench_steamin_read, 'steamin',),
-            ('%s: empty commit', speedtest.bench_empty_transaction_commit, 'commit',),
+            ('%s: empty explicit commit', speedtest.bench_empty_transaction_commit_explicit,
+             'ex_commit',),
+            ('%s: empty implicit commit', speedtest.bench_empty_transaction_commit_implicit,
+             'im_commit',),
             ('%s: allocate %d OIDs', speedtest.bench_new_oid, "new_oid",),
             ('%s: update %d conflicting objects', speedtest.bench_conflicting_updates, "conflicts",),
     ):

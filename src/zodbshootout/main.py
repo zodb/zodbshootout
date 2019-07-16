@@ -267,7 +267,8 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
             # Individual
             'add',
             'cold',
-            'commit',
+            'ex_commit',
+            'im_commit',
             'conflicts',
             'hot',
             'new_oid',
