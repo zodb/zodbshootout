@@ -810,11 +810,16 @@ class SpeedTestWorker(object):
         conn.getTransferCounts(True) # clear them
 
         transaction_manager = conn.transaction_manager
-
+        if explicit:
+            before_commit = transaction_manager.begin
+            assert conn.explicit_transactions
+        else:
+            before_commit = transaction_manager.get
+        commit = transaction_manager.commit
         begin = perf_counter()
         for _ in range(loops * self.inner_loops):
-            transaction_manager.begin()
-            transaction_manager.commit()
+            before_commit()
+            commit()
         end = perf_counter()
         self.__conn_did_not_load(conn)
         conn.close()
