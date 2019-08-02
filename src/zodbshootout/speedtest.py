@@ -568,20 +568,23 @@ class SpeedTestWorker(object):
         for _ in range(loops * self.inner_loops):
             t = TransactionMetaData()
             storage.tpc_begin(t)
+
             try:
                 oids = [storage.new_oid() for _ in pickles]
+
                 begin = perf_counter()
                 for pickle, oid in zip(pickles, oids):
                     storage.store(oid, 0, pickle, '', t)
 
                 storage.tpc_vote(t)
                 storage.tpc_finish(t)
+
+                end = perf_counter()
+                duration += (end - begin)
             except:
                 storage.tpc_abort(t)
                 raise
 
-            end = perf_counter()
-            duration += (end - begin)
         conn.close()
         db.close()
 
@@ -832,9 +835,10 @@ class SpeedTestWorker(object):
 
     @_inner_loops
     def bench_tpc(self, loops, db_factory):
-        from ZODB.Connection import TransactionMetaData
         db = db_factory()
-        storage = db.storage.new_instance()
+
+        conn = db.open()
+        storage = conn._storage
 
         begin = perf_counter()
         for _ in range(loops * self.inner_loops):
@@ -844,7 +848,7 @@ class SpeedTestWorker(object):
             storage.tpc_finish(tx)
         end = perf_counter()
 
-        storage.release()
+        conn.close()
         db.close()
         return end - begin
 
@@ -900,20 +904,20 @@ class SpeedTestWorker(object):
         conn = db.open()
         storage = conn._storage
 
-        loops = range(loops)
-        inner_loops = range(self.inner_loops)
+        total_loops = range(loops * self.inner_loops)
         to_allocate = range(self.objects_per_txn)
-        for _ in loops:
-            for _ in inner_loops:
-                tx = TransactionMetaData()
-                storage.tpc_begin(tx)
-                begin = perf_counter()
-                for _ in to_allocate:
-                    storage.new_oid()
-                storage.tpc_vote(tx)
-                storage.tpc_finish(tx)
-                end = perf_counter()
-                duration += (end - begin)
+        for _ in total_loops:
+            tx = TransactionMetaData()
+            storage.tpc_begin(tx)
+
+            begin = perf_counter()
+            for _ in to_allocate:
+                storage.new_oid()
+            storage.tpc_vote(tx)
+            storage.tpc_finish(tx)
+            end = perf_counter()
+
+            duration += (end - begin)
         return duration
 
 class ForkedSpeedTestWorker(SpeedTestWorker):
