@@ -295,15 +295,15 @@ class SpeedTestData(object):
         # The top two levels are persistent mappings so we can
         # use string keys; we'll never mutate them during the course of
         # a benchmark run.
-        t = install_mapping(root, 'speedtest', kind=PersistentMapping)
-        t = install_mapping(t, self._configuration_name, kind=PersistentMapping)
-        for i in range(self.concurrency):
-            worker_map = install_mapping(t, i)
+        speedtest = install_mapping(root, 'speedtest', kind=PersistentMapping)
+        config = install_mapping(speedtest, self._configuration_name, kind=PersistentMapping)
+        for worker_num in range(self.concurrency):
+            worker_map = install_mapping(config, worker_num)
             if include_data and len(worker_map) != self.objects_per_txn:
                 worker_map.update(self.data_to_store())
                 assert len(worker_map) == self.objects_per_txn
 
-        conflicts = install_mapping(t, self.CONFLICT_IDENTIFIER)
+        conflicts = install_mapping(config, self.CONFLICT_IDENTIFIER)
         if not conflicts:
             conflicts.update(self.data_to_store())
         assert len(conflicts) == self.objects_per_txn

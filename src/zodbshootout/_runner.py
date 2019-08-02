@@ -185,7 +185,11 @@ def run_with_options(runner, options):
     # yet (e.g., a switch from Py2 to Py3).
     if not options.worker and not options.zap:
         for factory in contenders:
-            data.populate(factory)
+            data.populate(
+                factory,
+                # If we're not going to run the add benchmark,
+                # put data in if it's not there already.
+                include_data='add' not in options.benchmarks)
 
     for db_factory in contenders:
         _run_benchmarks_for_contender(runner, options, data, db_factory)
@@ -230,6 +234,7 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
     db_benchmarks = {}
     # TODO: Where to include leak prints?
     for bench_descr, bench_func, bench_opt_name in (
+            # order matters
             ('%s: add %d objects', speedtest.bench_add, 'add'),
             ('%s: store %d raw pickles', speedtest.bench_store, 'store'),
             ('%s: update %d objects', speedtest.bench_update, 'update',),
