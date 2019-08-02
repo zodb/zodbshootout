@@ -278,6 +278,7 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
             'store',
             'update',
             'warm',
+            'tpc',
         ],
     )
     options = runner.parse_args(argv)

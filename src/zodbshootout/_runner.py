@@ -244,6 +244,7 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
              'ex_commit',),
             ('%s: empty implicit commit', speedtest.bench_empty_transaction_commit_implicit,
              'im_commit',),
+            ('%s: tpc', speedtest.bench_tpc, "tpc", ),
             ('%s: allocate %d OIDs', speedtest.bench_new_oid, "new_oid",),
             ('%s: update %d conflicting objects', speedtest.bench_conflicting_updates, "conflicts",),
     ):

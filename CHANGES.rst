@@ -20,6 +20,9 @@
   ``Connection.readCurrent`` (specifically, to see how well it can
   parallelize).
 
+- Add a benchmark (``tpc``) that explicitly (and only) tests moving
+  through the three phases of a successful transaction commit on a storage.
+
 - Make pre-loading objects with ``--min-objects`` faster by using
   pre-serialized object data.
 

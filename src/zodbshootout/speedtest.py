@@ -831,6 +831,25 @@ class SpeedTestWorker(object):
         return self.bench_empty_transaction_commit_explicit(loops, db_factory, False)
 
     @_inner_loops
+    def bench_tpc(self, loops, db_factory):
+        from ZODB.Connection import TransactionMetaData
+        db = db_factory()
+        storage = db.storage.new_instance()
+
+        begin = perf_counter()
+        for _ in range(loops * self.inner_loops):
+            tx = TransactionMetaData()
+            storage.tpc_begin(tx)
+            storage.tpc_vote(tx)
+            storage.tpc_finish(tx)
+        end = perf_counter()
+
+        storage.release()
+        db.close()
+        return end - begin
+
+
+    @_inner_loops
     def bench_readCurrent(self, loops, db_factory):
         """
         Tests the effect of adding calls to `Connection.readCurrent`
