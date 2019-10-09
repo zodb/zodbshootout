@@ -14,8 +14,11 @@
 """
 Helpers to run benchmarks concurrently.
 """
-from __future__ import print_function, absolute_import
+from __future__ import print_function
+from __future__ import absolute_import
+from __future__ import division
 
+import os
 import threading
 
 from pyperf import perf_counter
@@ -42,11 +45,28 @@ class AbstractConcurrentFunction(AbstractWrapper):
     """
 
     mp_strategy = None
+    collector_strategies = {
+        'max': max,
+        'sum': sum,
+        'min': min,
+        'avg': lambda times: sum(times) / len(times)
+    }
+    collector_strategy = max
 
     def __init__(self, workers, func_name):
         assert func_name
         self.func_name = func_name
         self.workers = workers
+        if os.environ.get('ZS_COLLECTOR_FUNC') in self.collector_strategies:
+            # Instead of using the max recorded time,
+            # you may want to use the sum of all the times. This helps
+            # account for decreased performance as concurrency increases
+            # due to systemic effects. i.e., the database may slow down
+            # just slightly; that may effect the max time only a little bit
+            # but the overall runtime quite a lot.
+            # The min time is similar to the max, but better at ignoring
+            # outliers.
+            self.collector_strategy = self.collector_strategies[os.environ['ZS_COLLECTOR_FUNC']]
 
     @property
     def __wrapped__(self):
@@ -101,9 +121,10 @@ class ForkedConcurrentFunction(AbstractConcurrentFunction):
     def _result_collector(self, times, total_duration, db_factory): # pylint:disable=unused-argument
         assert self.mp_strategy == 'mp'
         # We used forking, there was no contention we need to account for.
-        # But we do return, not an average, but the *worst* time. This
-        # lets pyperf do the averaging and smoothing for us.
-        return max(times)
+        # But we do return, not an average, but the *max* time. This
+        # lets pyperf do the averaging and smoothing for us and makes it
+        # more useful at finding outliers.
+        return self.collector_strategy(times)
 
 
 class ThreadedConcurrentFunction(AbstractConcurrentFunction):
@@ -114,7 +135,7 @@ class ThreadedConcurrentFunction(AbstractConcurrentFunction):
         # We used in-process concurrency. There may be contention to
         # account for.
 
-        # If we use our own wall clock time, we include all the
+        # If we use our own wall clock time (*total_duration*), we include all the
         # overhead of distributing the tasks and whatever internal
         # time they didn't want included. OTOH, if we just return the
         # sum (or average) of the individual concurrent runs, some
@@ -139,7 +160,7 @@ class ThreadedConcurrentFunction(AbstractConcurrentFunction):
         recorded_duration = sum(times)
         actual_average = actual_duration / concurrency
         recorded_average = recorded_duration / concurrency
-        if recorded_duration > actual_duration:
+        if recorded_duration > actual_duration and not os.environ.get('ZS_NO_SMOOTH'):
             # We think we took longer than we actually did. This means
             # that there was a high level of actual concurrent operations
             # going on, a lot of GIL switching, or gevent switching. That's a good thing!
@@ -159,7 +180,7 @@ class ThreadedConcurrentFunction(AbstractConcurrentFunction):
         else:
             if self.uses_gevent:
                 logger.info('(gevent NON-cooperative driver %s)', db_factory.name)
-            result = max(times)
+            result = self.collector_strategy(times)
         logger.debug(
             "Actual duration of %s is %s. Recorded duration is %s. "
             "Actual average is %s. Recorded average is %s. "

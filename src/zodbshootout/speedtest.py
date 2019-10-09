@@ -332,7 +332,7 @@ class SpeedTestData(object):
         # seems. However, all these objects are *not* reachable from
         # any other object, they're garbage. (TODO: Add them by OID to
         # a btree collection?)
-        chunk_size = min(needed, self.objects_per_txn)
+        chunk_size = min(needed, max(self.objects_per_txn, 10000))
         pickles = self.make_pickles(chunk_size, conn)
 
         storage = conn._storage
@@ -352,10 +352,15 @@ class SpeedTestData(object):
 def _inner_loops(f):
     # When a function is accessed, record that it does
     # inner loops
+    # Use inner loops when the functions being benchmarked are very short
+    # and the overhead of more outer loops slows things down. I.e., the
+    # setup cost of just entering the function is high.
     f.inner_loops = True
     return f
 
 def _no_inner_loops(f):
+    # Don't use inner loops when the functions being benchmarked
+    # are relatively slow.
     f.inner_loops = False
     return f
 
@@ -526,7 +531,8 @@ class SpeedTestWorker(object):
         assert db is not None, db_factory
         duration = 0
 
-        conn = db.open()
+        transaction_manager = transaction.TransactionManager(explicit=True)
+        conn = db.open(transaction_manager)
         root = conn.root()
 
         for _ in range(loops):
@@ -540,8 +546,9 @@ class SpeedTestWorker(object):
                 # invalidations/afterCompletion (which depends on
                 # whether the transaction is explicit or not).
                 begin = perf_counter()
+                transaction_manager.begin()
                 m.update(self.data_to_store())
-                transaction.commit()
+                transaction_manager.commit()
                 end = perf_counter()
                 duration += (end - begin)
                 # XXX: Why would we sync here? That really slows us down
@@ -764,7 +771,7 @@ class SpeedTestWorker(object):
         db.close()
         return end - begin
 
-    @_no_inner_loops
+    @_inner_loops
     def bench_hot_read(self, loops, db_factory):
         # In this test, we want all secondary caches to be well populated,
         # but the connection pickle cache should be empty.
@@ -775,7 +782,7 @@ class SpeedTestWorker(object):
 
         duration = 0
         got = 0
-        for i in range(loops):
+        for i in range(loops * self.inner_loops):
             # Clear the pickle cache of unghosted objects; they'll
             # all have to be reloaded. (We don't directly check the pickle
             # cache length here, but we do verify that the connection has loaded
@@ -789,7 +796,7 @@ class SpeedTestWorker(object):
             end = perf_counter()
             duration += (end - begin)
 
-        self.__check_access_count(got, loops)
+        self.__check_access_count(got, loops * self.inner_loops)
         self.__conn_did_load_objects(conn, loops)
 
         conn.close()
@@ -818,12 +825,14 @@ class SpeedTestWorker(object):
             assert conn.explicit_transactions
         else:
             before_commit = transaction_manager.get
+
         commit = transaction_manager.commit
         begin = perf_counter()
         for _ in range(loops * self.inner_loops):
             before_commit()
             commit()
         end = perf_counter()
+
         self.__conn_did_not_load(conn)
         conn.close()
         db.close()

@@ -230,7 +230,19 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
     # TODO: Include the gevent loop implementation in the metadata.
     speedtest = _create_speedtest(options, data)
 
-    db_name = db_factory.name
+    if options.gevent:
+        conc_name = 'greenlets'
+    elif options.threads:
+        conc_name = 'threads'
+    else:
+        conc_name = 'processes'
+
+    benchmark_descriptor = '{c=%d %s, o=%d} %s' % (
+        options.concurrency,
+        conc_name,
+        options.objects_per_txn,
+        db_factory.name
+    )
     db_benchmarks = {}
     # TODO: Where to include leak prints?
     for bench_descr, bench_func, bench_opt_name in (
@@ -242,7 +254,7 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
             ('%s: read %d cold prefeteched objects', speedtest.bench_cold_read_prefetch,
              'prefetch_cold',),
             ('%s: readCurrent %d objects', speedtest.bench_readCurrent, 'readCurrent',),
-            ('%s: read %d warm objects', speedtest.bench_read_after_write, 'warm',),
+            ('%s: write/read %d objects', speedtest.bench_read_after_write, 'warm',),
             ('%s: read %d hot objects', speedtest.bench_hot_read, 'hot',),
             ('%s: read %d steamin objects', speedtest.bench_steamin_read, 'steamin',),
             ('%s: empty explicit commit', speedtest.bench_empty_transaction_commit_explicit,
@@ -256,12 +268,10 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
         if bench_opt_name not in options.benchmarks:
             continue
 
-        name_args = (db_name, ) if '%d' not in bench_descr else (db_name, options.objects_per_txn)
+        name_args = (benchmark_descriptor, ) if '%d' not in bench_descr else (
+            benchmark_descriptor, options.objects_per_txn)
         bench_name = bench_descr % name_args
-        if bench_func.inner_loops:
-            inner_loops = speedtest.inner_loops
-        else:
-            inner_loops = 1
+
         # The decision on how to account for concurrency (whether to treat
         # that as part of the inner loop and thus divide total times by it)
         # depends on the runtime behaviour. See DistributedFunction for details.
@@ -269,7 +279,7 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
             bench_name,
             bench_func,
             db_factory,
-            inner_loops=inner_loops,
+            inner_loops=speedtest.inner_loops if bench_func.inner_loops else 1,
             metadata=metadata,
         )
 
