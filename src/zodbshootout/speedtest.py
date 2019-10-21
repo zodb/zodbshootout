@@ -461,7 +461,10 @@ class SpeedTestWorker(object):
                 self.worker_number,
             ))
 
-            db.pool.map(lambda c: c.cacheMinimize())
+            # db.pool.map went away in 98dc5f1ea0ac87205a4b545400de2049994511c7 but
+            # before that the pool was not iterable.
+            for c in db.pool.all:
+                c.cacheMinimize()
             # In ZODB 5, db.storage is the storage object passed to the DB object.
             # If it doesn't implement IMVCCStorage, then an adapter is wrapped
             # around it to make it do so (if it does, no such adapter is needed).
@@ -533,7 +536,9 @@ class SpeedTestWorker(object):
 
         transaction_manager = transaction.TransactionManager(explicit=True)
         conn = db.open(transaction_manager)
+        transaction_manager.begin()
         root = conn.root()
+        transaction_manager.commit()
 
         for _ in range(loops):
             m = self.data.data_for_worker(root, self)

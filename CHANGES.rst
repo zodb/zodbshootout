@@ -27,7 +27,9 @@
   pre-serialized object data.
 
 - Increase the default size of objects to 300 bytes, and make it the
-  same on Python 2 and Python 3.
+  same on Python 2 and Python 3. This closely matches the measurement
+  of the average object size in a large production database (30
+  million objects).
 
 - Add a benchmark for allocating new OIDs. See :issue:`47`.
 
@@ -40,6 +42,8 @@
 - Enhance the transaction commit benchmarks to show the difference
   between implicit commit and explicit commit. ZODB makes extra
   storage calls in the implicit case.
+
+- Add support for Python 3.8.
 
 0.7.0 (2019-05-31)
 ==================

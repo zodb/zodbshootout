@@ -75,8 +75,20 @@ class AbstractConcurrentFunction(AbstractWrapper):
     def __getattr__(self, name):
         # We're a function-like object, delegate to the function
         # on the first worker (which should be identical to everything
-        # else)
-        return getattr(self.__wrapped__, name)
+        # else).
+        # In Python 3.8, multiprocessing using the 'spawn' worker by default
+        # on more platforms where previously it used 'fork'. The spawn worker
+        # makes a *copy* of the object to run by pickling. Unpickling tries to look up
+        # "__getstate__' and '__setstate' on this object (not the type, for some reason)
+        # so we can be called in an incomplete state. Catch that and turn missing
+        # attributes into AttributeError instead of RecursionError or KeyError.
+        try:
+            worker = self.__dict__['workers'][0]
+            func_name = self.__dict__['func_name']
+        except KeyError:
+            raise AttributeError(name)
+        wrapped = getattr(worker, func_name)
+        return getattr(wrapped, name)
 
     def _distribute(self, func, arg_iter):
         return distribute(func, arg_iter, self.mp_strategy)

@@ -59,7 +59,12 @@ class BenchmarkDBFactory(object):
         self.can_zap = can_zap
 
     def __getattr__(self, name):
-        return getattr(self.factory, name)
+        # Because of multiprocessing. See AbstractConcurrentFunction
+        try:
+            factory = self.__dict__['factory']
+        except KeyError:
+            raise AttributeError(name)
+        return getattr(factory, name)
 
     def open(self):
         db = self.factory.open()
@@ -83,14 +88,14 @@ class BenchmarkDBFactory(object):
         stats = getattr(cache, 'stats', lambda: {})()
         if stats:
             # TODO: Get these recorded in metadata for the benchmark that just ran
-            logger.info(
+            logger.debug(
                 "Cache hit stats for %s (%s): Hits: %s Misses: %s Ratio: %s Stores: %s",
                 self.name, msg,
                 stats.get('hits'), stats.get('misses'), stats.get('ratio'), stats.get('sets')
             )
         else:
-            logger.info("No storage cache found for %s (%s)",
-                        self.name, msg)
+            logger.debug("No storage cache found for %s (%s)",
+                         self.name, msg)
 
     def _zap_all(self):
         if not self.can_zap:
