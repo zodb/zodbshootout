@@ -33,6 +33,7 @@ from persistent.mapping import PersistentMapping
 from zope.interface import implementer
 from ZODB.Connection import TransactionMetaData
 from ZODB.serialize import ObjectWriter
+from ZODB.utils import u64
 
 from .interfaces import IDBBenchmarkCollection
 from ._pobject import pobject_base_size
@@ -462,8 +463,13 @@ class SpeedTestWorker(object):
             ))
 
             # db.pool.map went away in 98dc5f1ea0ac87205a4b545400de2049994511c7 but
-            # before that the pool was not iterable.
-            for c in db.pool.all:
+            # before that the pool was not iterable, nor was its container of
+            # objects (transaction.weakset.WeakSet).
+            if hasattr(db.pool.all, 'as_weakref_list'):
+                conns = (wr() for wr in db.pool.all.as_weakref_list())
+            else:
+                conns = db.pool.all
+            for c in (_c for _c in conns if _c is not None):
                 c.cacheMinimize()
             # In ZODB 5, db.storage is the storage object passed to the DB object.
             # If it doesn't implement IMVCCStorage, then an adapter is wrapped
@@ -506,7 +512,6 @@ class SpeedTestWorker(object):
             raise AssertionError("Stored data; expected 0, got %s" % (stores,))
 
     def __conn_did_load_objects(self, conn, loops=1, data=None):
-        from ZODB.utils import u64
         loads, _ = conn.getTransferCounts(True)
         if loads < self.objects_per_txn * loops:
             raise AssertionError(

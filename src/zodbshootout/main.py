@@ -19,6 +19,7 @@ from __future__ import print_function, absolute_import
 import argparse
 import sys
 
+# pylint:disable=import-outside-toplevel
 
 if str is not bytes:
     ask = input
@@ -333,6 +334,31 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
         sys.exit("Cannot zap if you're not adding")
 
     from ._runner import run_with_options
+
+    # If an output file isn't given, do go ahead and pick a temporary
+    # file to save to.  This way the user doesn't necessarily lose any
+    # results that later turned out to be interesting.
+    if not options.output and not options.worker and options.pipe is None:
+        import tempfile
+        prefix = "zodbshootout-results-c{}-o{}-{}-".format(
+            options.concurrency,
+            options.objects_per_txn,
+            'gevent' if options.gevent else ('threads' if options.threads else 'procs')
+        )
+        temp_output_fd, name = tempfile.mkstemp(".json", prefix=prefix)
+        # Passing the pipe doesn't work? Writing the results gets a bad FD
+        # in the master. Plus, it also disables normal display of the results
+        # to the console.
+        # options.pipe = temp_output_fd
+        os.close(temp_output_fd)
+        # --append accepts a filename, but it must already be valid benchmark JSON data.
+        # --output verifies the file doesn't exist.
+        os.unlink(name)
+        options.append = name
+        print("(Automatically saving output to ", name, ")",
+              file=sys.stderr, sep='')
+
+
     run_with_options(runner, options)
 
 if __name__ == '__main__':
