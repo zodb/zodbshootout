@@ -20,17 +20,15 @@ import os
 import subprocess
 import time
 import traceback
+import tempfile
 
 # The type of runner to enable, and the arguments needed
 # to use it.
-procs = [
-    ('process',
-     []),
-    ('gevent',
-     ('--threads', 'shared', '--gevent')),
-    ('threads',
-     ('--threads', 'shared')),
-]
+procs = {
+    'process': (),
+    'gevent':  ('--threads', 'shared', '--gevent'),
+    'threads': ('--threads', 'shared'),
+}
 
 # The concurrency levels.
 # TODO: thread=1 and process=1 are pretty much redundant.
@@ -85,6 +83,9 @@ def run_one(env, proc, conc, count):
     # runs with the same loop count > --min-time)
 
     print("***", env, proc, conc, count)
+    output_path = os.path.join(out_dir, "output.json")
+    if os.path.exists(output_path):
+        print("\t", output_path, "Already exists, skipping")
     cmd = [
         os.path.expanduser(f"{workon_home}/{env}/bin/zodbshootout"),
         '-q',
@@ -95,7 +96,7 @@ def run_one(env, proc, conc, count):
         '--values', str(values),
         '--warmups', str(warmups),
         '-p', '5',
-        '-o', os.path.join(out_dir, "output.json"),
+        '-o', output_path,
         '-c', str(conc),
         '--object-counts', str(count)
     ]
@@ -121,15 +122,24 @@ def run_one(env, proc, conc, count):
         subprocess.check_call(cmd)
     except subprocess.CalledProcessError:
         traceback.print_exc()
+        if os.path.exists(output_path):
+            fd, path = tempfile.mkstemp('.json', 'output-failed-', out_dir)
+            os.close(fd)
+            os.rename(output_path, path)
     print("***")
     print()
 
 def main():
+    if 1 in concs and 'process' and 'threads' in procs:
+        # This is redundant.
+        del procs['process']
+
     for env in envs:
         for count in counts:
             for conc in concs:
-                for proc in procs:
+                for proc in sorted(procs.items()):
                     run_one(env, proc, conc, count)
+
 
 if __name__ == '__main__':
     main()

@@ -66,6 +66,22 @@ class BenchmarkDBFactory(object):
             raise AttributeError(name)
         return getattr(factory, name)
 
+    # TODO: Handle wrappers
+
+    def _config_is_type(self, kind):
+        try:
+            return isinstance(self.factory.config.storage, kind)
+        except AttributeError:
+            return False
+
+    def is_filestorage(self):
+        from ZODB.config import FileStorage
+        return self._config_is_type(FileStorage)
+
+    def is_ZEO(self):
+        from ZODB.config import ZEOClient
+        return self._config_is_type(ZEOClient)
+
     def open(self):
         db = self.factory.open()
         # Explicitly set the number of cached objects so we're

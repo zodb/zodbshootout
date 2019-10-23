@@ -21,7 +21,7 @@ interpreter lock.
 from __future__ import print_function, absolute_import
 
 import os
-
+import functools
 
 from pyperf import Benchmark
 from pyperf import BenchmarkSuite
@@ -205,6 +205,7 @@ def _create_speedtest(options, data):
     from ._concurrent import SharedConcurrentBenchmarkCollection
     from ._concurrent import ThreadedConcurrentBenchmarkCollection
     from ._concurrent import ForkedConcurrentBenchmarkCollection
+
     runner_kind = NonConcurrentBenchmarkCollection
     if options.concurrency > 1:
         if options.threads == 'shared':
@@ -218,6 +219,65 @@ def _create_speedtest(options, data):
     _setup_profiling(options, speedtest)
     _setup_leaks(options, speedtest)
     return speedtest
+
+_MAGIC_NUMBER = 666
+
+def _disabled_benchmark(*_args):
+    return _MAGIC_NUMBER
+_disabled_benchmark.inner_loops = 1
+
+def _is_known_bad(options, bench_opt_name, db_factory):
+    # Is the test known to fail? If so, we might want to
+    # skip it.
+    if options.concurrency == 1:
+        # All known issues occur with higher concurrency
+        return False
+
+    in_process = options.threads or options.gevent
+    shared = options.threads == 'shared'
+    if db_factory.is_filestorage() and not shared:
+        # Filestorage only works with shared in-process concurrency
+        return True
+
+    if db_factory.is_ZEO():
+        if in_process:
+            return bench_opt_name in ('conflicts', )
+        return bench_opt_name in (
+            # This tends to produce lots of errors:
+
+            # A storage error occurred during the second phase of the
+            # two-phase commit. Resources may be in an inconsistent
+            # state.
+            #
+            # Client has seen newer transactions than server!
+            # Registration or cache validation failed, ('Server behind
+            # client, %r < %r, %s', b'\x03\xd3Pq\xf7<`\xaa',
+            # b'\x03\xd3Pv\xabK\xfc\xdd', Protocol(('localhost',
+            # 24003), '1', False))
+            'readCurrent',
+        )
+    return False
+
+class _SafeFunction(object):
+    caught = (Exception,) # TODO: Narrow this down
+    def __init__(self, wrapping):
+        self.wrapped = wrapping
+        functools.update_wrapper(self, wrapping)
+
+    def __getattr__(self, name):
+        # Because of multiprocessing. See AbstractConcurrentFunction
+        try:
+            wrapped = self.__dict__['wrapped']
+        except KeyError:
+            raise AttributeError(name)
+        return getattr(wrapped, name)
+
+    def __call__(self, *args, **kwargs):
+        try:
+            return self.wrapped(*args, **kwargs)
+        except self.caught:
+            logger.exception("When running %s", self._wrapped)
+            return _MAGIC_NUMBER
 
 def _run_benchmarks_for_contender(runner, options, data, db_factory):
     metadata = {
@@ -267,6 +327,14 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
     ):
         if bench_opt_name not in options.benchmarks:
             continue
+
+        if _is_known_bad(options, bench_opt_name, db_factory):
+            # TODO: Add option to disable this.
+            bench_func = _disabled_benchmark
+            bench_descr += ' (disabled)'
+
+        if options.keep_going:
+            bench_func = _SafeFunction(bench_func)
 
         name_args = (benchmark_descriptor, ) if '%d' not in bench_descr else (
             benchmark_descriptor, options.objects_per_txn)

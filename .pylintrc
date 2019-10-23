@@ -43,8 +43,9 @@ disable=wrong-import-position,
     cyclic-import,
     too-many-arguments,
     redefined-builtin,
-	useless-suppression,
-    useless-object-inheritance
+    useless-suppression,
+    useless-object-inheritance,
+    import-outside-toplevel
 #	undefined-all-variable
 
 
@@ -91,3 +92,7 @@ bad-functions=input
 # pylint leaves it off. This is the proximal cause of the
 # undefined-all-variable crash.
 #unsafe-load-any-extension = no
+
+# Local Variables:
+# mode: conf
+# End:

@@ -937,6 +937,9 @@ class SpeedTestWorker(object):
             end = perf_counter()
 
             duration += (end - begin)
+
+        conn.close()
+        db.close()
         return duration
 
 class ForkedSpeedTestWorker(SpeedTestWorker):

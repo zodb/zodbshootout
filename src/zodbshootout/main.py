@@ -200,6 +200,12 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
         " then one DB will be used by all threads. If you give the 'unique'"
         " argument, each thread will get its own DB."
     )
+    con_group.add_argument(
+        "--fail-fast", dest="keep_going",
+        action='store_false',
+        default=True,
+        help="Fail at the first benchmark failure instead of continuing."
+    )
 
     try:
         import gevent
@@ -292,7 +298,9 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
     # BEFORE other imports..and make sure we use "threads".
     # Because with MP, we use MP.Queue which would hang if we
     # monkey-patched the parent
-    if getattr(options, 'gevent', False):
+    if not hasattr(options, 'gevent'):
+        options.gevent = False
+    if options.gevent:
         import gevent.monkey
         gevent.monkey.patch_all(Event=True)
         if not options.threads:
