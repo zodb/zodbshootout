@@ -12,6 +12,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+# pylint:disable=too-many-locals
+
 import argparse
 import json
 import os
@@ -32,13 +34,13 @@ def _fix_database(n, version=''):
         result = 'PostgreSQL'
     if 'zeo' in n.lower():
         result = 'ZEO'
-    if 'fs' in n.lower() or 'filestorage' in n.lower():
+    elif 'fs' in n.lower() or 'filestorage' in n.lower():
         result = 'FileStorage'
     if version:
         result = f'{result} ({version})'
     return result
 
-def suite_to_benchmark_data(args, benchmark_suite, version=''):
+def suite_to_benchmark_data(_args, benchmark_suite, version=''):
     """
     Return a DataFrame containing every observation.
     """
@@ -47,12 +49,17 @@ def suite_to_benchmark_data(args, benchmark_suite, version=''):
 
         # {c=1 processes, o=100} mysqlclient_hf: read 100 hot objects'
         name = benchmark.get_name()
+        if '(disabled)' in name:
+            continue
+
         # '{c=1 processes, o=100', ' mysqlclient_hf: read 100 hot objects'
         prefix, suffix = name.rsplit('}', 1)
         ConcurrencyKind = 'processes' if 'processes' in prefix else 'threads'
 
         prefix = prefix.replace(' processes', '').replace(' threads', '')
+        prefix = prefix.replace(' greenlets', '')
         prefix += '}'
+
         d = json.loads(prefix.replace('c', '"c"').replace('o', '"o"').replace('=', ':'))
         Concurrency = d['c']
         Objects = d['o']
@@ -158,7 +165,7 @@ def main():
     matplotlib.rcParams["figure.figsize"] = 10, 5
     seaborn.set(style="white")
 
-    save_all(df, outdir, args.prefixes)
+    save_all(df, outdir, args.versions)
 
 
 if __name__ == "__main__":

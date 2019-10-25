@@ -219,7 +219,7 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
     # Output
 
     out_group.add_argument(
-        "--log", nargs="?", const="INFO", default=False,
+        "--log", nargs="?", const="INFO", default='ERROR',
         action=LogAction,
         help="Enable logging in the root logger at the given level. "
         "Without an argument, the default is INFO. You may specify "
@@ -265,30 +265,30 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
     )
 
     parser.add_argument("config_file", type=argparse.FileType())
+    # TODO: Get this list dynamically.
+    benchmark_names = [
+        # Individual
+        'add',
+        'cold',
+        'ex_commit',
+        'im_commit',
+        'conflicts',
+        'hot',
+        'new_oid',
+        'prefetch_cold',
+        'readCurrent',
+        'steamin',
+        'store',
+        'update',
+        'warm',
+        'tpc',
+    ]
+    benchmark_choices = benchmark_names + ['-' + n for n in benchmark_names]
     parser.add_argument(
         'benchmarks',
         nargs='*',
         default='all',
-        # TODO: Get this list dynamically.
-        choices=[
-            # Special
-            'all',
-            # Individual
-            'add',
-            'cold',
-            'ex_commit',
-            'im_commit',
-            'conflicts',
-            'hot',
-            'new_oid',
-            'prefetch_cold',
-            'readCurrent',
-            'steamin',
-            'store',
-            'update',
-            'warm',
-            'tpc',
-        ],
+        choices=['all'] + benchmark_choices,
     )
     options = runner.parse_args(argv)
 
@@ -306,8 +306,24 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
         if not options.threads:
             options.threads = 'shared'
 
-    if 'all' in options.benchmarks or options.benchmarks == 'all':
-        options.benchmarks = ContainsAll()
+    options.benchmarks = (
+        set(benchmark_names)
+        if options.benchmarks == 'all'
+        else set(options.benchmarks)
+    )
+
+    if 'all' in options.benchmarks:
+        options.benchmarks.update(benchmark_names)
+
+    excluded = {n[1:] for n in options.benchmarks if n.startswith('-')}
+    if excluded:
+        options.benchmarks = {n for n in options.benchmarks if not n.startswith('-')}
+        if not options.benchmarks:
+            # They *only* gave exclusions so we must begin
+            # by taking away from the full set.
+            options.benchmarks = set(benchmark_names)
+        options.benchmarks = {n for n in options.benchmarks
+                              if n not in excluded and not n.startswith('-')}
 
     if options.log:
         if hasattr(options.log, 'read'):

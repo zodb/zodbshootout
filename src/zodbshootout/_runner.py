@@ -216,6 +216,12 @@ def _create_speedtest(options, data):
         else:
             runner_kind = ForkedConcurrentBenchmarkCollection
     speedtest = runner_kind(data, options)
+    if options.objects_per_txn <= 100 and speedtest.inner_loops < 50:
+        if options.concurrency <= 10:
+            inner_loops = 100
+        else:
+            inner_loops = 30
+        speedtest.inner_loops = max(speedtest.inner_loops, inner_loops)
     _setup_profiling(options, speedtest)
     _setup_leaks(options, speedtest)
     return speedtest
@@ -276,7 +282,7 @@ class _SafeFunction(object):
         try:
             return self.wrapped(*args, **kwargs)
         except self.caught:
-            logger.exception("When running %s", self._wrapped)
+            logger.exception("When running %s", self.wrapped)
             return _MAGIC_NUMBER
 
 def _run_benchmarks_for_contender(runner, options, data, db_factory):

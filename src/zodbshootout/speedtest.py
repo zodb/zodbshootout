@@ -34,6 +34,7 @@ from zope.interface import implementer
 from ZODB.Connection import TransactionMetaData
 from ZODB.serialize import ObjectWriter
 from ZODB.utils import u64
+from ZODB.utils import z64
 
 from .interfaces import IDBBenchmarkCollection
 from ._pobject import pobject_base_size
@@ -579,22 +580,24 @@ class SpeedTestWorker(object):
         db = db_factory()
         conn = db.open()
         pickles = self.data.make_pickles(self.objects_per_txn, conn)
-
         storage = conn._storage
+        oids = None
         duration = 0
+        prev_tid = z64
         for _ in range(loops * self.inner_loops):
             t = TransactionMetaData()
             storage.tpc_begin(t)
 
             try:
-                oids = [storage.new_oid() for _ in pickles]
+                if not oids:
+                    oids = [storage.new_oid() for _ in pickles]
 
                 begin = perf_counter()
                 for pickle, oid in zip(pickles, oids):
-                    storage.store(oid, 0, pickle, '', t)
+                    storage.store(oid, prev_tid, pickle, '', t)
 
                 storage.tpc_vote(t)
-                storage.tpc_finish(t)
+                prev_tid = storage.tpc_finish(t)
 
                 end = perf_counter()
                 duration += (end - begin)

@@ -45,6 +45,9 @@
 
 - Add support for Python 3.8.
 
+- Allow excluding particular benchmarks on the command line. For
+  example, ``-cold``.
+
 0.7.0 (2019-05-31)
 ==================
 

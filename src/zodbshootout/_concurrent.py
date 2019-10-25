@@ -37,6 +37,9 @@ from .fork import distribute
 
 logger = __import__('logging').getLogger(__name__)
 
+def avg(times):
+    return sum(times) / len(times)
+
 @implementer(IDBBenchmark)
 class AbstractConcurrentFunction(AbstractWrapper):
     """
@@ -49,7 +52,7 @@ class AbstractConcurrentFunction(AbstractWrapper):
         'max': max,
         'sum': sum,
         'min': min,
-        'avg': lambda times: sum(times) / len(times)
+        'avg': avg,
     }
     collector_strategy = max
 
@@ -142,6 +145,7 @@ class ForkedConcurrentFunction(AbstractConcurrentFunction):
 class ThreadedConcurrentFunction(AbstractConcurrentFunction):
     mp_strategy = 'threads'
     uses_gevent = False
+    smooth = not os.environ.get('ZS_NO_SMOOTH')
 
     def _result_collector(self, times, total_duration, db_factory):
         # We used in-process concurrency. There may be contention to
@@ -172,11 +176,11 @@ class ThreadedConcurrentFunction(AbstractConcurrentFunction):
         recorded_duration = sum(times)
         actual_average = actual_duration / concurrency
         recorded_average = recorded_duration / concurrency
-        if recorded_duration > actual_duration and not os.environ.get('ZS_NO_SMOOTH'):
+        if recorded_duration > actual_duration and not self.smooth:
             # We think we took longer than we actually did. This means
             # that there was a high level of actual concurrent operations
             # going on, a lot of GIL switching, or gevent switching. That's a good thing!
-            # it means you have a cooperative database
+            # it means you have a cooperative database driver.
             #
             # In that case, we want to treat the concurrency as essentially an extra
             # 'inner_loop' for the benchmark. To do this, we find the biggest one
@@ -187,11 +191,11 @@ class ThreadedConcurrentFunction(AbstractConcurrentFunction):
             # with one type of database (fully cooperative, fully
             # non-cooperative), you may not want to do this normalization.
             if self.uses_gevent:
-                logger.info('(gevent-cooperative driver %s)', db_factory.name)
+                logger.debug('(gevent-cooperative driver %s)', db_factory.name)
             result = max(times) / concurrency
         else:
             if self.uses_gevent:
-                logger.info('(gevent NON-cooperative driver %s)', db_factory.name)
+                logger.debug('(gevent NON-cooperative driver %s)', db_factory.name)
             result = self.collector_strategy(times)
         logger.debug(
             "Actual duration of %s is %s. Recorded duration is %s. "
@@ -228,6 +232,15 @@ class AbstractConcurrentBenchmarkCollection(AbstractBenchmarkFunctionWrapper):
     def delegate(self):
         return self.workers[0]
 
+    @property
+    def inner_loops(self):
+        return self.workers[0].inner_loops
+
+    @inner_loops.setter
+    def inner_loops(self, nv):
+        for w in self.workers:
+            w.inner_loops = nv
+
 
 class ThreadedConcurrentBenchmarkCollection(AbstractConcurrentBenchmarkCollection):
     """
@@ -260,9 +273,17 @@ class SharedConcurrentBenchmarkCollection(ThreadedConcurrentBenchmarkCollection)
 class _NonConcurrentFunction(AbstractConcurrentFunction):
 
     def _distribute(self, func, arg_iter):
+        import gc
         args = list(arg_iter)
         assert len(args) == 1
-        return func(args[0], lambda msg: None)
+        # Do account for GC as part of the single-threaded function.
+        # This shows up better on profiling.
+        c = gc.collect
+        gc.collect = lambda *args: []
+        try:
+            return func(args[0], lambda msg: None)
+        finally:
+            gc.collect = c
 
     def _result_collector(self, times, total_duration, db_factory):
         return times
@@ -281,7 +302,12 @@ class NonConcurrentBenchmarkCollection(AbstractConcurrentBenchmarkCollection):
 
     def make_function_wrapper(self, func_name):
         # pylint:disable=no-value-for-parameter
-        return _NonConcurrentFunction(self.workers, func_name)
+        # Some storages are very expensive to open, and some benchmarks
+        # open and close storages (when they really should probably be explicitly
+        # clearing caches)...that makes interpreting profiles hard. So
+        # only open them once.
+
+        return SharedDBFunction(_NonConcurrentFunction(self.workers, func_name))
 
 
 class ForkedConcurrentBenchmarkCollection(ThreadedConcurrentBenchmarkCollection):

@@ -162,7 +162,7 @@ class TestMain(unittest.TestCase):
         self.test_forked_concurrency_with_profile()
 
     def test_gevent_cooperative(self):
-        self.args += ('--gevent', '--log', 'INFO', '--concurrency', '3')
+        self.args += ('--gevent', '--log', 'DEBUG', '--concurrency', '3')
 
         output = self._run()
         self.assertIn('gevent NON-cooperative', output)
