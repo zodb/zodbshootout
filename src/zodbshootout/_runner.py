@@ -22,6 +22,7 @@ from __future__ import print_function, absolute_import
 
 import os
 import functools
+from collections import defaultdict
 
 from pyperf import Benchmark
 from pyperf import BenchmarkSuite
@@ -190,10 +191,24 @@ def run_with_options(runner, options):
                 # If we're not going to run the add benchmark,
                 # put data in if it's not there already.
                 include_data='add' not in options.benchmarks)
+    _run_with_data(runner, options, data, contenders)
+
+
+def _run_with_data(runner, options, data, contenders):
+    db_benchmarks = defaultdict(dict)
+    speedtest = _create_speedtest(options, data)
+    for bench in BENCHMARKS:
+        bench_opt_name = bench[2]
+        if bench_opt_name not in options.benchmarks:
+            continue
+
+        for db_factory in contenders:
+            result = _run_benchmark_for_contender(runner, options,
+                                                  speedtest, bench, db_factory)
+            db_benchmarks[db_factory.name][bench_opt_name] = result
 
     for db_factory in contenders:
-        _run_benchmarks_for_contender(runner, options, data, db_factory)
-
+        _combine_benchmark_results(options, db_factory, db_benchmarks[db_factory.name])
 
 def _create_speedtest(options, data):
     # For concurrency of 1, or if we're using forked concurrency, we
@@ -261,6 +276,9 @@ def _is_known_bad(options, bench_opt_name, db_factory):
             # b'\x03\xd3Pv\xabK\xfc\xdd', Protocol(('localhost',
             # 24003), '1', False))
             'readCurrent',
+
+            # This tends to produce errors: exceptions.AssertionError', ('finished called wo lock',)
+            'conflicts',
         )
     return False
 
@@ -285,7 +303,26 @@ class _SafeFunction(object):
             logger.exception("When running %s", self.wrapped)
             return _MAGIC_NUMBER
 
-def _run_benchmarks_for_contender(runner, options, data, db_factory):
+BENCHMARKS = (
+    # human name format, method name, benchmark name
+    # order matters
+    ('%s: add %d objects', "bench_add", 'add'),
+    ('%s: store %d raw pickles', "bench_store", 'store'),
+    ('%s: update %d objects', "bench_update", 'update',),
+    ('%s: read %d cold objects', "bench_cold_read", 'cold',),
+    ('%s: read %d cold prefeteched objects', "bench_cold_read_prefetch", 'prefetch_cold',),
+    ('%s: readCurrent %d objects', "bench_readCurrent", 'readCurrent',),
+    ('%s: write/read %d objects', "bench_read_after_write", 'warm',),
+    ('%s: read %d hot objects', "bench_hot_read", 'hot',),
+    ('%s: read %d steamin objects', "bench_steamin_read", 'steamin',),
+    ('%s: empty explicit commit', "bench_empty_transaction_commit_explicit", 'ex_commit',),
+    ('%s: empty implicit commit', "bench_empty_transaction_commit_implicit", 'im_commit',),
+    ('%s: tpc', "bench_tpc", "tpc", ),
+    ('%s: allocate %d OIDs', "bench_new_oid", "new_oid",),
+    ('%s: update %d conflicting objects', "bench_conflicting_updates", "conflicts",),
+)
+
+def _run_benchmark_for_contender(runner, options, speedtest, bench, db_factory):
     metadata = {
         'gevent': options.gevent,
         'threads': options.threads,
@@ -294,7 +331,7 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
         'objects_per_txn': options.objects_per_txn,
     }
     # TODO: Include the gevent loop implementation in the metadata.
-    speedtest = _create_speedtest(options, data)
+
 
     if options.gevent:
         conc_name = 'greenlets'
@@ -309,57 +346,34 @@ def _run_benchmarks_for_contender(runner, options, data, db_factory):
         options.objects_per_txn,
         db_factory.name
     )
-    db_benchmarks = {}
+
     # TODO: Where to include leak prints?
-    for bench_descr, bench_func, bench_opt_name in (
-            # order matters
-            ('%s: add %d objects', speedtest.bench_add, 'add'),
-            ('%s: store %d raw pickles', speedtest.bench_store, 'store'),
-            ('%s: update %d objects', speedtest.bench_update, 'update',),
-            ('%s: read %d cold objects', speedtest.bench_cold_read, 'cold',),
-            ('%s: read %d cold prefeteched objects', speedtest.bench_cold_read_prefetch,
-             'prefetch_cold',),
-            ('%s: readCurrent %d objects', speedtest.bench_readCurrent, 'readCurrent',),
-            ('%s: write/read %d objects', speedtest.bench_read_after_write, 'warm',),
-            ('%s: read %d hot objects', speedtest.bench_hot_read, 'hot',),
-            ('%s: read %d steamin objects', speedtest.bench_steamin_read, 'steamin',),
-            ('%s: empty explicit commit', speedtest.bench_empty_transaction_commit_explicit,
-             'ex_commit',),
-            ('%s: empty implicit commit', speedtest.bench_empty_transaction_commit_implicit,
-             'im_commit',),
-            ('%s: tpc', speedtest.bench_tpc, "tpc", ),
-            ('%s: allocate %d OIDs', speedtest.bench_new_oid, "new_oid",),
-            ('%s: update %d conflicting objects', speedtest.bench_conflicting_updates, "conflicts",),
-    ):
-        if bench_opt_name not in options.benchmarks:
-            continue
+    bench_descr, bench_func, bench_opt_name = bench
+    bench_func = getattr(speedtest, bench_func)
 
-        if _is_known_bad(options, bench_opt_name, db_factory):
-            # TODO: Add option to disable this.
-            bench_func = _disabled_benchmark
-            bench_descr += ' (disabled)'
+    if _is_known_bad(options, bench_opt_name, db_factory):
+        # TODO: Add option to disable this.
+        bench_func = _disabled_benchmark
+        bench_descr += ' (disabled)'
 
-        if options.keep_going:
-            bench_func = _SafeFunction(bench_func)
+    if options.keep_going:
+        bench_func = _SafeFunction(bench_func)
 
-        name_args = (benchmark_descriptor, ) if '%d' not in bench_descr else (
-            benchmark_descriptor, options.objects_per_txn)
-        bench_name = bench_descr % name_args
+    name_args = (benchmark_descriptor, ) if '%d' not in bench_descr else (
+        benchmark_descriptor, options.objects_per_txn)
+    bench_name = bench_descr % name_args
 
-        # The decision on how to account for concurrency (whether to treat
-        # that as part of the inner loop and thus divide total times by it)
-        # depends on the runtime behaviour. See DistributedFunction for details.
-        benchmark = runner.bench_time_func(
-            bench_name,
-            bench_func,
-            db_factory,
-            inner_loops=speedtest.inner_loops if bench_func.inner_loops else 1,
-            metadata=metadata,
-        )
-
-        db_benchmarks[bench_opt_name] = benchmark
-
-    _combine_benchmark_results(options, db_factory, db_benchmarks)
+    # The decision on how to account for concurrency (whether to treat
+    # that as part of the inner loop and thus divide total times by it)
+    # depends on the runtime behaviour. See DistributedFunction for details.
+    benchmark = runner.bench_time_func(
+        bench_name,
+        bench_func,
+        db_factory,
+        inner_loops=speedtest.inner_loops if bench_func.inner_loops else 1,
+        metadata=metadata,
+    )
+    return benchmark
 
 def _combine_benchmark_results(options, db_factory, db_benchmarks):
     # Do this in the master only, after running all the benchmarks

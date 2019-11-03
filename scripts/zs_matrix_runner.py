@@ -25,10 +25,11 @@ import tempfile
 
 # The type of runner to enable, and the arguments needed
 # to use it.
+# TODO: Be intelligent about picking gevent based on the drivers
 procs = {
-    'gevent':  ('--threads', 'shared', '--gevent'),
-    # 'process': (),
-    # 'threads': ('--threads', 'shared'),
+    #'gevent':  ('--threads', 'shared', '--gevent'),
+    'process': (),
+    'threads': ('--threads', 'shared'),
 }
 
 # The concurrency levels.
@@ -41,8 +42,8 @@ concs = [
 # How many objects
 counts = [
     1,
-    10,
-    100
+    5,
+    20
 ]
 
 # The virtual environment to use.
@@ -50,7 +51,7 @@ counts = [
 envs = [
     #'relstorage38',
     'relstorage27',
-    #'relstorage27-rs2',
+    'relstorage27-rs2',
 ]
 
 if 'ZS_MATRIX_ENV' in os.environ:
@@ -90,13 +91,13 @@ if not smooth_results_in_process_concurrency:
 def run_one(
         env, proc, conc, count, conf,
         excluded=(),
-        processes=1, # How many times the whole thing is repeated.
+        processes=2, # How many times the whole thing is repeated.
         # How many times does the function get to run its loops. If
         # processes * values = 1, then it can't report a standard deviation
         # or print stability warnings.
-        values=3,
+        values=4,
         warmups=0,
-        min_time_ms=20.0, # Default is 100ms
+        min_time_ms=50.0, # Default is 100ms
         loops=3 # How many loops (* its inner loops)
 ):    # pylint:disable=too-many-locals
     if 'pypy' in env:
@@ -157,6 +158,12 @@ def run_one(
     #     'warm',
     #     'new_oid',
     # ])
+
+    cmd.extend([
+        'add',
+        'warm',
+        'cold',
+    ])
 
     if excluded:
         cmd.append('--')

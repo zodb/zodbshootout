@@ -13,7 +13,6 @@ from __future__ import division
 from __future__ import print_function
 
 # pylint:disable=too-many-locals
-
 import argparse
 import json
 import os
@@ -36,6 +35,8 @@ def _fix_database(n, version=''):
         result = 'ZEO'
     elif 'fs' in n.lower() or 'filestorage' in n.lower():
         result = 'FileStorage'
+    if 'sqlite' in n.lower():
+        result = 'SQLite'
     if version:
         result = f'{result} ({version})'
     return result
@@ -54,7 +55,14 @@ def suite_to_benchmark_data(_args, benchmark_suite, version=''):
 
         # '{c=1 processes, o=100', ' mysqlclient_hf: read 100 hot objects'
         prefix, suffix = name.rsplit('}', 1)
-        ConcurrencyKind = 'processes' if 'processes' in prefix else 'threads'
+        if 'processes' in prefix:
+            ConcurrencyKind = 'processes'
+        elif 'greenlets' in prefix:
+            ConcurrencyKind = 'greenlets'
+        else:
+            assert 'threads' in prefix
+            ConcurrencyKind = 'threads'
+
 
         prefix = prefix.replace(' processes', '').replace(' threads', '')
         prefix = prefix.replace(' greenlets', '')
@@ -87,34 +95,134 @@ def suite_to_benchmark_data(_args, benchmark_suite, version=''):
     return df
 
 
-def save_one(df, benchmark_name, outdir, palette=None):
-    df = df.query('action=="%s"' % benchmark_name)
-    fname = benchmark_name.replace(' ', '_').replace('/', '_') + '.png'
+def save_one(df, benchmark_name, outdir, palette=None,
+             # The x and y are for an individual graph in the matrix
+             x="concurrency", y="duration",
+             # The col and row define the columns and rows of the matrix
+             col="objects", row="concurrency_kind",
+             # while hue defines the category within an individual graph.
+             hue="database", hue_order=None,
+             show_y_ticks=False, kind="bar",
+             **kwargs):
+
+    fname = benchmark_name.replace(' ', '_').replace('/', '_').replace(':', '_')
+    fname = f'{fname}_{x}_{y}_{col}_{row}_{hue}_{kind}'
 
     fig = seaborn.catplot(
-        "concurrency", "duration",
+        x, y,
         data=df,
-        #kind="swarm", # The swarm plots is also interesting
-        kind="bar",
-        hue="database",
-        hue_order=sorted(df['database'].unique()),
-        col="objects",
-        row="concurrency_kind",
+        #kind="swarm", # The swarm plots is also interesting, as is point
+        kind=kind,
+        hue=hue,
+        hue_order=sorted(df[hue].unique()) if hue_order is None else hue_order,
+        col=col,
+        row=row,
         palette=palette,
         sharey=False,
         legend=False,
+        **kwargs
     )
-    fig.set(ylabel="ms")
+    if not show_y_ticks:
+        fig.set(yticks=[])
+    else:
+        fig.set(ylabel="ms")
     fig.add_legend(title=benchmark_name)
-    fig.savefig(os.path.join(outdir, fname), transparent=True)
+    for ext in ('.png',):
+        fig.savefig(os.path.join(outdir, fname) + ext, transparent=True)
     fig.despine()
     plt.close(fig.fig)
 
-def save_all(df, outdir, versions=None):
+def save_all(df, outdir, versions=None, pref_db_order=None):
     all_bmarks = df['action'].unique()
 
+    # The drawing functions use Cocoa and don't work on either threads
+    # or processes.
+    # pool = ProcessPoolExecutor()
+    # def _save_one(*args, **kwargs):
+    #     pool.submit(save_one, *args, **kwargs)
+    _save_one = save_one
+
     for bmark in all_bmarks:
-        save_one(df, bmark, outdir, palette='Paired' if versions else None)
+        action_data = df[df.action == bmark]
+        action_data = action_data[action_data.concurrency_kind != "greenlets"]
+        _save_one(
+            action_data, bmark, outdir,
+            palette='Paired' if versions or pref_db_order else None,
+            hue_order=pref_db_order,
+        )
+
+
+    if versions:
+        all_dbs_including_versions = df['database'].unique()
+        all_dbs = {
+            db.replace('(' + versions[0] + ')', '').replace(
+                '(' + versions[1] + ')', ''
+            ).strip()
+            for db in all_dbs_including_versions
+        }
+
+        parent_out_dir = outdir
+        for root_db in all_dbs:
+            outdir = os.path.join(parent_out_dir, root_db)
+            os.makedirs(outdir, exist_ok=True)
+            db_v1 = f"{root_db} ({versions[0]})"
+            db_v2 = f"{root_db} ({versions[1]})"
+            db_df = df[df.database == db_v1]
+            db_df2 = df[df.database == db_v2]
+            db_df = db_df.append(db_df2)
+
+            for bmark in all_bmarks:
+                # adf: By database, by action
+                adf = db_df[db_df.action == bmark]
+                _save_one(
+                    adf.query('concurrency > 1'),
+                    f"{root_db}: {bmark}",
+                    outdir,
+                    x="concurrency_kind",
+                    hue="database",
+                    row="concurrency",
+                    palette='Paired',
+                )
+                # This puts all three concurrencies together
+                # and emphasizes the differences between them.
+
+                _save_one(
+                    adf.query('concurrency > 1'),
+                    f"{root_db}: {bmark}",
+                    outdir,
+                    x="database",
+                    hue="concurrency_kind",
+                    row="concurrency",
+                    palette='Accent',
+                    order=sorted((db_v1, db_v2)),
+                )
+
+                cdf = adf[adf.objects == 20]
+                try:
+                    _save_one(
+                        cdf,
+                        f"{root_db}: {bmark} | objects = 20",
+                        outdir,
+                        palette='Paired',
+                        col="concurrency_kind", row="objects",
+                    )
+                except ValueError:
+                    continue
+
+
+                for ck in adf['concurrency_kind'].unique():
+                    ckf = adf[adf.concurrency_kind == ck]
+                    # ckf: drilldown by database, by action, by concurrency kind.
+                    for oc in ckf['objects'].unique():
+                        ocf = ckf[ckf.objects == oc]
+                        _save_one(
+                            ocf,
+                            f"{root_db}: {bmark} ck={ck} o={oc}",
+                            outdir,
+                            palette='Paired',
+                            col="concurrency_kind", row="objects",
+                            show_y_ticks=True,
+                        )
 
 
 def main():
@@ -162,7 +270,7 @@ def main():
     print("Saving images to", outdir)
 
 
-    matplotlib.rcParams["figure.figsize"] = 10, 5
+    matplotlib.rcParams["figure.figsize"] = 20, 10
     seaborn.set(style="white")
 
     save_all(df, outdir, args.versions)

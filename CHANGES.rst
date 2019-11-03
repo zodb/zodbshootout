@@ -48,6 +48,12 @@
 - Allow excluding particular benchmarks on the command line. For
   example, ``-cold``.
 
+- When benchmarking multiple ZODB configurations, run a particular
+  benchmark for all databases before moving on to the next benchmark. Previously
+  all benchmarks for a database were run before moving on to the next
+  database. This makes it a bit easier to eyeball results as the
+  process is running.
+
 0.7.0 (2019-05-31)
 ==================
 

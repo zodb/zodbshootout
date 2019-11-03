@@ -711,6 +711,7 @@ class SpeedTestWorker(object):
 
         for i in range(total_loops):
             db = db_factory()
+
             begin = perf_counter()
             conn = db.open()
             root = conn.root()
