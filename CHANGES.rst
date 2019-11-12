@@ -2,7 +2,7 @@
  Changes
 =========
 
-0.8.0 (unreleased)
+0.8.0 (2019-11-12)
 ==================
 
 - Fix ``--min-objects``. Previously it did nothing.
