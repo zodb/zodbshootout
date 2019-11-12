@@ -10,12 +10,12 @@ addons:
 # older PG
   postgresql: "9.6"
 python:
+  - pypy
   - 2.7
   - 3.5
   - 3.6
   - 3.7
   - 3.8
-  - pypy
   - pypy3
 env:
   global:
@@ -57,7 +57,11 @@ install:
   - pip install -U -e .[test]
   - .travis/setup-$ENV.sh
 
-cache: pip
+cache:
+  pip: true
+  directories:
+    - $HOME/.wheelhouse
+    - $HOME/.ccache
 
 before_cache:
     - rm -f $HOME/.cache/pip/log/debug.log
