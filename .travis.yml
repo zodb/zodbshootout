@@ -22,6 +22,9 @@ env:
     - ENV=travis
     - PYTHONHASHSEED=42
     - PYTHONPATH=.travis
+    - CC="ccache gcc"
+    - CFLAGS="-g -pipe -std=gnu++11"
+    - CXXFLAGS="-g -pipe -std=gnu++11"
     - Z_FAST="--processes 1 --loops 1 --values 1 --warmups 0 --object-counts 100"
     - Z_RUN="coverage run .travis/cover.py"
 # We can test each one separately, but it
