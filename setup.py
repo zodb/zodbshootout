@@ -90,7 +90,8 @@ setup(
         "Operating System :: MacOS :: MacOS X",
         "Operating System :: POSIX",
         "Intended Audience :: Developers",
-        "Development Status :: 4 - Beta"
+        "Development Status :: 4 - Beta",
+        "License :: OSI Approved :: Zope Public License",
     ],
 
 )
