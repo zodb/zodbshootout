@@ -8,3 +8,6 @@ recursive-include doc *.rst
 recursive-include doc Makefile
 recursive-include samples *.conf
 recursive-include .travis *.py *.sh *.conf
+
+# added by check_manifest.py
+recursive-include scripts *.py
