@@ -14,6 +14,12 @@ individual databases directly, but most likely the
 ``zs_matrix_combine`` script should be used to produce an aggregated
 file for visualizing with ``zs_matrix_graph`` or exporting with
 ``zs_matrix_export_csv``.
+
+TODO:
+- Make this take a configuration (ini) file for which
+  options to enable (processes, concurrency levels, counts,
+  virtual environments)
+- Move this and related scripts into the zodbshootout core.
 """
 
 import os
