@@ -262,7 +262,7 @@ def _is_known_bad(options, bench_opt_name, db_factory):
 
     if db_factory.is_ZEO():
         if in_process:
-            return bench_opt_name in ('conflicts', )
+            return bench_opt_name in ('conflicts', 'conflicts_map')
         return bench_opt_name in (
             # This tends to produce lots of errors:
 
@@ -279,7 +279,13 @@ def _is_known_bad(options, bench_opt_name, db_factory):
 
             # This tends to produce errors: exceptions.AssertionError', ('finished called wo lock',)
             'conflicts',
+            'conflicts_map'
         )
+
+    if not options.btrees and bench_opt_name == 'conflicts_map':
+        # Only BTrees can resolve this type of conflict
+        return True
+
     return False
 
 class _SafeFunction(object):
@@ -320,6 +326,7 @@ BENCHMARKS = (
     ('%s: tpc', "bench_tpc", "tpc", ),
     ('%s: allocate %d OIDs', "bench_new_oid", "new_oid",),
     ('%s: update %d conflicting objects', "bench_conflicting_updates", "conflicts",),
+    ('%s: update %d conflicting objects in place', "bench_conflicting_updates_plus_map", "conflicts_map",),
 )
 
 def _run_benchmark_for_contender(runner, options, speedtest, bench, db_factory):

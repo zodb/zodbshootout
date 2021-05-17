@@ -642,7 +642,7 @@ class SpeedTestWorker(object):
         return duration
 
     @_inner_loops
-    def bench_conflicting_updates(self, loops, db_factory):
+    def bench_conflicting_updates(self, loops, db_factory, update_map=False):
         # Select either evens or odds to write to, based on our own
         # worker number; thus each worker conflicts on half the
         # objects with half the other workers. This interleaves the
@@ -651,9 +651,15 @@ class SpeedTestWorker(object):
         selector_value = self.worker_number % 2
         def selector(m):
             for k, v in iteritems(m):
+                if update_map:
+                    m[k] = v
                 if k % 2 == selector_value:
                     yield v
         return self.bench_update(loops, db_factory, self.data.CONFLICT_IDENTIFIER, selector)
+
+    @_inner_loops
+    def bench_conflicting_updates_plus_map(self, loops, db_factory):
+        return self.bench_conflicting_updates(loops, db_factory, update_map=True)
 
     @_no_inner_loops
     def bench_read_after_write(self, loops, db_factory):
