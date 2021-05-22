@@ -5,8 +5,16 @@
 0.9.0 (unreleased)
 ==================
 
-- Nothing changed yet.
+- Add a benchmark that also updates the BTree when we're making conflicts.
+  This will involve ``readCurrent`` calls in the database.
 
+- Use custom BTree subclasses so that BTree node sizes can be adjusted.
+
+- Add a benchmark that generates conflicts on ``readCurrent`` objects.
+  Workers write to their own objects, and also randomly call
+  ``readCurrent`` on some other worker's objects. This benchmark tests
+  how well storages handle ``readCurrent`` conflicts together with
+  writing.
 
 0.8.0 (2019-11-12)
 ==================

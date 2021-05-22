@@ -168,11 +168,11 @@ def run_with_options(runner, options):
                          pack_on_populate=options.pack_on_populate)
     data.min_object_count = options.min_object_count
     if options.btrees:
-        import BTrees
+        from . import _pbtrees
         if options.btrees == 'IO':
-            data.MappingType = BTrees.family64.IO.BTree
+            data.MappingType = _pbtrees.IOBTree
         else:
-            data.MappingType = BTrees.family64.OO.BTree
+            data.MappingType = _pbtrees.OOBTree
 
     # We include a mapping storage as the first item
     # as a ground floor to set expectations.
@@ -248,10 +248,13 @@ def _disabled_benchmark(*_args):
 _disabled_benchmark.inner_loops = 1
 
 def _is_known_bad(options, bench_opt_name, db_factory):
+    # pylint:disable=too-many-return-statements
     # Is the test known to fail? If so, we might want to
     # skip it.
     if options.concurrency == 1:
-        # All known issues occur with higher concurrency
+        # Almost all known issues occur with higher concurrency
+        if bench_opt_name == 'readCurrent_conflicts':
+            return True
         return False
 
     in_process = options.threads or options.gevent
@@ -299,7 +302,7 @@ class _SafeFunction(object):
         try:
             wrapped = self.__dict__['wrapped']
         except KeyError:
-            raise AttributeError(name)
+            raise AttributeError(name) # pylint:disable=raise-missing-from
         return getattr(wrapped, name)
 
     def __call__(self, *args, **kwargs):
@@ -327,6 +330,7 @@ BENCHMARKS = (
     ('%s: allocate %d OIDs', "bench_new_oid", "new_oid",),
     ('%s: update %d conflicting objects', "bench_conflicting_updates", "conflicts",),
     ('%s: update %d conflicting objects in place', "bench_conflicting_updates_plus_map", "conflicts_map",),
+    ('%s: readCurrent %d conflicts', "bench_conflicting_readCurrent_updates", "readCurrent_conflicts",),
 )
 
 def _run_benchmark_for_contender(runner, options, speedtest, bench, db_factory):

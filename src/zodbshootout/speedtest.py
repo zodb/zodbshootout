@@ -17,6 +17,7 @@ The core speed test loop.
 from __future__ import print_function, absolute_import
 
 # pylint:disable=too-many-locals
+# pylint:disable=too-many-lines
 
 # This file is imported after gevent monkey patching (if applicable)
 # so it's safe to import anything.
@@ -229,6 +230,19 @@ class SpeedTestData(object):
         Return the mapping that *worker_id* should use to read or write.
         """
         return root['speedtest'][self._configuration_name][worker_id]
+
+    def data_for_random_worker(self, root, worker):
+        """
+        Return the mapping for a random worker other than *worker*.
+        """
+        # Be sure to only include other running workers, so we
+        # must exclude any worker number greater than self.concurrency.
+        config = root['speedtest'][self._configuration_name]
+        not_ids = (worker.worker_number, self.CONFLICT_IDENTIFIER)
+        possibles = [x for x in config.keys()
+                     if x not in not_ids
+                     and x < self.concurrency]
+        return config[random.choice(possibles)]
 
     @log_timed
     def populate(self, db_factory, include_data=False):
@@ -660,6 +674,78 @@ class SpeedTestWorker(object):
     @_inner_loops
     def bench_conflicting_updates_plus_map(self, loops, db_factory):
         return self.bench_conflicting_updates(loops, db_factory, update_map=True)
+
+    @_inner_loops
+    def bench_conflicting_readCurrent_updates(self, loops, db_factory):
+        # We update all our own objects, while also performing a readCurrent on
+        # some object owned by a random other worker, and then commit.
+        # We handle transaction retries as necessary and include them in our
+        # duration.
+        from collections import defaultdict
+        from transaction.interfaces import TransientError
+        import time
+        db = db_factory()
+        transaction_manager = transaction.TransactionManager(explicit=True)
+        conn = db.open(transaction_manager)
+
+        exc_counts = defaultdict(int)
+        count_updated = 0
+        duration = 0.0
+        conflict_worker_id = self.worker_number - 1
+        if conflict_worker_id < 0:
+            conflict_worker_id = self.data.concurrency - 1
+        for _ in range(loops * self.inner_loops):
+            ignored_sleep_time = 0
+            begin = perf_counter()
+            while True:
+                try:
+                    transaction_manager.begin()
+                    root = conn.root()
+                    m = self.data.data_for_worker_id(root, self.worker_number)
+                    local_updates = self.data.write_test_update_values(itervalues(m))
+                    other_data = self.data.data_for_worker_id(root, conflict_worker_id)
+                    assert other_data is not m
+                    # XXX: Should we only do one readCurrent(), or readCurrent()
+                    # everything? Doing everything provides the biggest chance
+                    # for storages that can more quickly find *some*, but not all
+                    # readCurrent conflicts, e.g., RelStorages's cache-based detection.
+                    # OTOH, it adds more work overall, when we're pretty sure that
+                    # just the first one will have changed.
+                    for v in other_data.values():
+                        # Only objects that have been activated can be
+                        # readCurrent(). The Connection checks their _p_serial,
+                        # which is only set once they are active.
+                        v._p_activate()
+                        conn.readCurrent(v)
+
+                    # Real processes don't always take exactly the same amount of time and do
+                    # the same bytecode steps.
+                    if random.random() < 0.4:
+                        time.sleep(0.001)
+                        ignored_sleep_time += 0.001
+                    transaction_manager.commit()
+                except TransientError as ex:
+                    transaction_manager.abort()
+                    # Most real applications insert a backoff delay between
+                    # retries. Do so as well.
+                    time.sleep(0.003)
+                    exc_counts[type(ex)] += 1
+                else:
+                    count_updated += local_updates
+                    break
+            end = perf_counter()
+            duration += (end - begin)
+            duration -= ignored_sleep_time
+            # Allow other threads to run, since we completed successfully.
+            # This again simulates real work waiting for a new task.
+            time.sleep(0.001)
+
+        conn.close()
+        # We can only assert that we hit the right number if we're
+        # not doing fancy selection.
+        self.__check_access_count(count_updated, loops * self.inner_loops)
+        db.close()
+        return duration
 
     @_no_inner_loops
     def bench_read_after_write(self, loops, db_factory):
