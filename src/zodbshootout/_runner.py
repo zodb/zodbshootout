@@ -165,6 +165,7 @@ def run_with_options(runner, options):
         contenders.append(factory)
 
     data = SpeedTestData(concurrency, objects_per_txn, object_size,
+                         use_blobs=options.use_blobs,
                          pack_on_populate=options.pack_on_populate)
     data.min_object_count = options.min_object_count
     if options.btrees:

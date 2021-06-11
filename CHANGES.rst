@@ -16,6 +16,8 @@
   how well storages handle ``readCurrent`` conflicts together with
   writing.
 
+- Fix the ``--use-blobs`` option.
+
 0.8.0 (2019-11-12)
 ==================
 

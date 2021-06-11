@@ -192,11 +192,12 @@ class ThreadedConcurrentFunction(AbstractConcurrentFunction):
             # non-cooperative), you may not want to do this normalization.
             if self.uses_gevent:
                 logger.debug('(gevent-cooperative driver %s)', db_factory.name)
-            result = max(times) / concurrency
+            result = sum(times) / concurrency
         else:
             if self.uses_gevent:
                 logger.debug('(gevent NON-cooperative driver %s)', db_factory.name)
             result = self.collector_strategy(times)
+
         logger.debug(
             "Actual duration of %s is %s. Recorded duration is %s. "
             "Actual average is %s. Recorded average is %s. "

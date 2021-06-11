@@ -23,7 +23,8 @@ install_requires = [
     'pyperf',
     'ZODB >= 4.4.2',
     'ZEO >= 4.2.0',
-    'statistics; python_version == "2.7"'
+    'statistics; python_version == "2.7"',
+    'perfmetrics',
 ]
 
 tests_require = [

@@ -6,8 +6,15 @@ from __future__ import print_function, absolute_import, division
 # A separate file to reduce imports before gevent
 # No ZODB._compat import or anything that imports transaction as that
 # would mess up monkey patching.
-from pickle import dumps
 from persistent import Persistent
+
+try:
+    from ZODB._compat import HIGHEST_PROTOCOL
+    from ZODB._compat import dumps
+except ImportError:
+    from pickle import HIGHEST_PROTOCOL
+    from pickle import dumps
+
 
 class AbstractPObject(object):
     """
@@ -52,4 +59,4 @@ class PObject(Persistent,
 
 # Estimate the size of a minimal PObject stored in ZODB.
 pobject_base_size = (
-    len(dumps(PObject)) + len(dumps(PObject(b''))))
+    len(dumps(PObject, HIGHEST_PROTOCOL)) + len(dumps(PObject(b''), HIGHEST_PROTOCOL)))

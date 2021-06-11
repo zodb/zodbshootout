@@ -45,7 +45,9 @@ disable=wrong-import-position,
     redefined-builtin,
     useless-suppression,
     useless-object-inheritance,
-    import-outside-toplevel
+    import-outside-toplevel,
+    raise-missing-from,
+    super-with-arguments
 #	undefined-all-variable
 
 

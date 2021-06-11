@@ -78,13 +78,19 @@ def main(argv=None): # pylint:disable=too-many-statements,too-many-locals,too-ma
         gevent.monkey.patch_all(Event=True)
 
     import os
-    env_options = ['--inherit-environ',
-                   ','.join([k for k in os.environ
-                             if k.startswith(('GEVENT',
-                                              'PYTHON',
-                                              'ZS', # experimental zodbshootout config
-                                              'RS', # relstorage config
-                                              'COVERAGE'))])]
+    env_options = [
+        '--inherit-environ',
+        ','.join([k for k in os.environ
+                  if k.startswith((
+                          'GEVENT',
+                          'PYTHON',
+                          'ZS', # experimental zodbshootout config
+                          'RS', # relstorage config
+                          'COVERAGE',
+                          'STATSD',
+                  ))
+                  ])
+    ]
     # This is a default, so put it early
     argv[0:0] = env_options
 

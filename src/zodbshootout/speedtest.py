@@ -27,7 +27,7 @@ import random
 
 from pyperf import perf_counter
 
-import transaction
+from transaction import TransactionManager
 
 from persistent.mapping import PersistentMapping
 
@@ -83,6 +83,7 @@ def log_timed(func):
         logger.debug("Function %s took %s", func.__name__, t.duration)
         return result
     return f
+
 
 
 class SpeedTestData(object):
@@ -253,9 +254,11 @@ class SpeedTestData(object):
         self._guarantee_min_random_data(self.objects_per_txn)
 
         db = db_factory()
-        conn = db.open()
+        txm = TransactionManager(explicit=True)
+        conn = db.open(txm)
         root = conn.root()
-        self._populate_into_open_database(db, conn, root, include_data)
+        txm.begin()
+        self._populate_into_open_database(db, conn, root, include_data, txm)
         conn.cacheMinimize()
         # Clear transfer counts so as not to mess up any downstream
         # assertions about what they should be.
@@ -265,7 +268,7 @@ class SpeedTestData(object):
 
     CONFLICT_IDENTIFIER = "conflicts"
 
-    def _populate_into_open_database(self, db, conn, root, include_data):
+    def _populate_into_open_database(self, db, conn, root, include_data, txm):
         """
         Commits the transaction.
         """
@@ -274,7 +277,7 @@ class SpeedTestData(object):
         if self.pack_on_populate:
             # clear the database
             root['speedtest'] = None
-            transaction.commit()
+            txm.commit()
             db.pack()
 
         # Make sure the minimum objects are present. Not all storages
@@ -323,7 +326,7 @@ class SpeedTestData(object):
         if not conflicts:
             conflicts.update(self.data_to_store())
         assert len(conflicts) == self.objects_per_txn
-        transaction.commit()
+        txm.commit()
         logger.debug('Populated storage.')
 
     def make_pickles(self, count, conn=None):
@@ -554,7 +557,7 @@ class SpeedTestWorker(object):
         assert db is not None, db_factory
         duration = 0
 
-        transaction_manager = transaction.TransactionManager(explicit=True)
+        transaction_manager = TransactionManager(explicit=True)
         conn = db.open(transaction_manager)
         transaction_manager.begin()
         root = conn.root()
@@ -632,7 +635,7 @@ class SpeedTestWorker(object):
             data_selector=itervalues,
     ):
         db = db_factory()
-        transaction_manager = transaction.TransactionManager(explicit=True)
+        transaction_manager = TransactionManager(explicit=True)
         conn = db.open(transaction_manager)
 
         count_updated = 0
@@ -681,70 +684,93 @@ class SpeedTestWorker(object):
         # some object owned by a random other worker, and then commit.
         # We handle transaction retries as necessary and include them in our
         # duration.
+        # pylint:disable=too-many-statements
+        from itertools import cycle
         from collections import defaultdict
         from transaction.interfaces import TransientError
+        from perfmetrics import statsd_client
         import time
+        statsd = statsd_client()
         db = db_factory()
-        transaction_manager = transaction.TransactionManager(explicit=True)
+        transaction_manager = TransactionManager(explicit=True)
         conn = db.open(transaction_manager)
 
         exc_counts = defaultdict(int)
         count_updated = 0
         duration = 0.0
-        conflict_worker_id = self.worker_number - 1
-        if conflict_worker_id < 0:
-            conflict_worker_id = self.data.concurrency - 1
+        retries = 0
+        conflict_worker_id = self.worker_number + 1
+        if conflict_worker_id > self.data.concurrency - 1:
+            conflict_worker_id = 0
+
+        should_sleep = self.worker_number % 2 == 0
+        sleep_time = 0.001 + ((self.worker_number % 4) / 1000.0)
+        backoff_time = sleep_time * 3
+        conflict_pattern = cycle((True, False, False, True, True, False, False))
+
         for _ in range(loops * self.inner_loops):
             ignored_sleep_time = 0
             begin = perf_counter()
             while True:
                 try:
                     transaction_manager.begin()
+                    # print("Invalidations", self.worker_number,
+                    #       conn._storage.LAST_IGNORE_TID, set(conn._storage.LAST_INVALID))
                     root = conn.root()
                     m = self.data.data_for_worker_id(root, self.worker_number)
                     local_updates = self.data.write_test_update_values(itervalues(m))
-                    other_data = self.data.data_for_worker_id(root, conflict_worker_id)
-                    assert other_data is not m
-                    # XXX: Should we only do one readCurrent(), or readCurrent()
-                    # everything? Doing everything provides the biggest chance
-                    # for storages that can more quickly find *some*, but not all
-                    # readCurrent conflicts, e.g., RelStorages's cache-based detection.
-                    # OTOH, it adds more work overall, when we're pretty sure that
-                    # just the first one will have changed.
-                    for v in other_data.values():
-                        # Only objects that have been activated can be
-                        # readCurrent(). The Connection checks their _p_serial,
-                        # which is only set once they are active.
-                        v._p_activate()
-                        conn.readCurrent(v)
+                    if next(conflict_pattern):
+                        other_data = self.data.data_for_worker_id(root, conflict_worker_id)
+                        assert other_data is not m
+                        # XXX: Should we only do one readCurrent(), or readCurrent()
+                        # everything? Doing everything provides the biggest chance
+                        # for storages that can more quickly find *some*, but not all
+                        # readCurrent conflicts, e.g., RelStorages's cache-based detection.
+                        # OTOH, it adds more work overall, when we're pretty sure that
+                        # just the first one will have changed.
+                        for v in other_data.values():
+                            # Only objects that have been activated can be
+                            # readCurrent(). The Connection checks their _p_serial,
+                            # which is only set once they are active.
+                            v._p_activate()
+                            conn.readCurrent(v)
+                            break
 
                     # Real processes don't always take exactly the same amount of time and do
                     # the same bytecode steps.
-                    if random.random() < 0.4:
-                        time.sleep(0.001)
-                        ignored_sleep_time += 0.001
+                    if should_sleep:
+                        time.sleep(sleep_time)
+                        ignored_sleep_time += sleep_time
                     transaction_manager.commit()
                 except TransientError as ex:
                     transaction_manager.abort()
                     # Most real applications insert a backoff delay between
                     # retries. Do so as well.
-                    time.sleep(0.003)
+                    time.sleep(backoff_time)
+                    ignored_sleep_time += backoff_time
                     exc_counts[type(ex)] += 1
+                    retries += 1
+                    if statsd:
+                        statsd.incr('speedtest.retry')
                 else:
                     count_updated += local_updates
                     break
+
             end = perf_counter()
             duration += (end - begin)
             duration -= ignored_sleep_time
             # Allow other threads to run, since we completed successfully.
             # This again simulates real work waiting for a new task.
-            time.sleep(0.001)
+            time.sleep(sleep_time)
 
         conn.close()
         # We can only assert that we hit the right number if we're
         # not doing fancy selection.
         self.__check_access_count(count_updated, loops * self.inner_loops)
         db.close()
+        # print("Done", self.worker_number, "Retries", retries, "Loops", _)
+        # from pprint import pprint
+        # pprint(dict(exc_counts))
         return duration
 
     @_no_inner_loops
@@ -761,18 +787,19 @@ class SpeedTestWorker(object):
 
         duration = 0
         got = 0
+        txm = TransactionManager()
         for i in range(loops):
             db = db_factory()
 
             begin = perf_counter()
-            conn = db.open()
+            conn = db.open(txm)
             root = conn.root()
             m = self.data.data_for_worker(root, self)
             self.data.write_test_update_values(itervalues(m))
-            transaction.commit()
+            txm.commit()
 
             got += self.data.read_test_read_values(itervalues(m))
-            transaction.commit()
+            txm.commit()
             end = perf_counter()
             duration += (end - begin)
 
@@ -840,21 +867,22 @@ class SpeedTestWorker(object):
         # conn.prefetch() may or may not do anything, so
         # we actually access the data. This also ensure the objects
         # are unghostified.
-        conn = db.open()
+        transaction_manager = TransactionManager()
+        conn = db.open(transaction_manager)
         root = conn.root()
         m = self.data.data_for_worker(root, self)
         got = self.data.read_test_read_values(itervalues(m))
         self.__check_access_count(got, 1)
         # Clear the transfer counts before continuing
         conn.getTransferCounts(True)
-        return conn, root
+        return conn, root, transaction_manager
 
     @_inner_loops
     def bench_steamin_read(self, loops, db_factory):
         db = db_factory()
 
         # First, prime the cache
-        conn, root = self.__prime_caches(db)
+        conn, root, _txm = self.__prime_caches(db)
 
         # All the objects should now be cached locally, in the pickle cache
         # and in the storage cache, if any. We won't need to load anything
@@ -884,7 +912,7 @@ class SpeedTestWorker(object):
         db = db_factory()
 
         # First, prime the cache
-        conn, root = self.__prime_caches(db)
+        conn, root, _txm = self.__prime_caches(db)
 
         duration = 0
         got = 0
@@ -918,7 +946,7 @@ class SpeedTestWorker(object):
         # For example, it synchronizes the storage.
         # The same set of calls happens for commit or abort.
         if explicit:
-            transaction_manager = transaction.TransactionManager(explicit=True)
+            transaction_manager = TransactionManager(explicit=True)
         else:
             transaction_manager = None
 
@@ -984,17 +1012,18 @@ class SpeedTestWorker(object):
         # Also, objects can only go into readCurrent when they have a
         # _p_serial, which they only get once unghosted.
         db = db_factory()
-        conn, root = self.__prime_caches(db)
+
+        conn, root, txm = self.__prime_caches(db)
 
         begin = perf_counter()
         for _ in range(loops * self.inner_loops):
-            transaction.begin()
+            txm.begin()
             m = self.data.data_for_worker(root, self)
             conn.register(m)
             rc = conn.readCurrent
             for v in itervalues(m):
                 rc(v)
-            transaction.commit()
+            txm.commit()
         end = perf_counter()
         self.__conn_did_not_store(conn)
         conn.close()
