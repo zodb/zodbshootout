@@ -79,7 +79,7 @@ setup(
             'relstorage[oracle] >= 2.0rc1',
         ],
         'sqlite': [
-            'relstorage[sqlite] >= 3.0.0',
+            'relstorage >= 3.0.0',
         ],
         "test": tests_require,
     },
