@@ -78,6 +78,9 @@ setup(
         'oracle': [
             'relstorage[oracle] >= 2.0rc1',
         ],
+        'sqlite': [
+            'relstorage >= 3.0.0',
+        ],
         "test": tests_require,
     },
     classifiers=[
